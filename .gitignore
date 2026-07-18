@@ -1,0 +1,93 @@
+# --------------------------------------------------
+# SI-1 Git Ignore
+# --------------------------------------------------
+
+# Windows
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# macOS
+.DS_Store
+
+# Linux
+*~
+
+# IDEs
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+
+# Logs
+*.log
+logs/
+runtime/logs/
+
+# Runtime cache
+runtime/cache/
+runtime/temp/
+
+# Memory (runtime-generated)
+memory/sessions/*
+memory/snapshots/*
+
+# Keep folder structure
+!memory/sessions/.gitkeep
+!memory/snapshots/.gitkeep
+
+# Model artifacts
+*.gguf
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.ckpt
+*.onnx
+
+# Local configuration
+configs/local.json
+configs/private.json
+
+# Temporary
+*.tmp
+*.temp
+*.bak
+*.old
+
+# Archives
+*.zip
+*.7z
+*.rar
+*.tar
+*.gz
+
+# Node (future)
+node_modules/
+
+# Rust (future)
+target/
+
+# Build output
+dist/
+build/
+
+# Environment variables
+.env
+.env.*
+
+# Secrets
+secrets/
+*.key
+*.pem
+*.crt
+
+# Git merge leftovers
+*.orig

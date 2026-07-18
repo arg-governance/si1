@@ -1,0 +1,13 @@
+Folder listing (sanitized)
+
+configs/
+  cpu-cache-llama_cpp.ps1
+  gpu-cache-llama_cpp.ps1
+  gpu-nocache-llama_cpp.ps1
+memory/
+  runtime.json
+  facts.json
+  archive.json
+logs/
+  runlog.jsonl
+*** End of sanitized tree ***
