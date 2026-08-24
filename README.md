@@ -345,6 +345,7 @@ python -m unittest discover -s tests -p "test_*.py" -v
 | **[core/system.md](core/system.md)** | **Lucifer Constitutional Prompt** | Lucifer's identity, operational principles, reasoning protocols, compliance signatures (`[ALIGNED]:`), and behavioral hygiene. |
 | **[core/observer_system.md](core/observer_system.md)** | **Obi Observer Prompt** | Obi's sibling mentor role, the Four-Hook Discipline Contract, stateless review constraints, and binary Peripheral Gate specifications. |
 | **[CHANGELOG.md](CHANGELOG.md)** | **Micro-Kernel Changelog** | Complete technical trajectory, duel loop hardening, token streaming fixes, and version history. |
+| **[LICENSE](LICENSE)** / **[LICENSE-NOTICE](LICENSE-NOTICE)** | **AGPL-3.0-or-later + Rationale** | Full license text + a one-page explanation of *why* AGPL-3.0 (network clause). |
 
 ---
 
@@ -364,4 +365,11 @@ All cognitive operations across Lucifer and Obi are bound to the 8 Constitutiona
 
 ## 📄 XII. License & Governance
 
-SI-1 is an open-source constitutional AI safety and governance architecture developed under the *Protokol Časne Saradnje*. Built with open-source foundations on `llama.cpp`, `Gemma-4`, and `Graphene DPoS`.
+SI-1 is released under the **GNU Affero General Public License v3.0 or later** (`AGPL-3.0-or-later`).
+See [LICENSE](LICENSE) for the full text and [LICENSE-NOTICE](LICENSE-NOTICE) for the rationale.
+The license was chosen deliberately (§13 *Remote Network Interaction*) so that any network-facing
+deployment of SI-1 — container image, ISO, hosted VM, init-level service — must publish its
+modifications. This turns the *Protokol Časne Saradnje* posture into a license obligation rather
+than a request. Decision recorded as [ADR-0004](docs/decisions.md).
+
+Built with open-source foundations on `llama.cpp`, `Gemma-4`, and `Graphene DPoS`.

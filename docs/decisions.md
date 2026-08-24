@@ -91,8 +91,95 @@ to force-refresh VS Code's git watcher. No content was rewritten.
 
 ---
 
-## How to add a new ADR
+## ADR-0004 — Adopt AGPL-3.0-or-later as the project license
 
+- **Date:** 2026-08-24
+- **Status:** Accepted
+
+### Context
+SI-1 is installed at `/opt/si1` on an antiX-base sovereign distribution and
+will launch `llama-server` instances at init level under `chmod 700`. This
+makes the project a **network-facing service** by deployment topology, not
+just a library. The constitutional prompts (`core/system.md`,
+`core/observer_system.md`) are the regulatory text of the system. The
+*Protokol Časne Saradnje* (Protocol of Honorable Collaboration) commits to
+"un-bribable" governance. That commitment must be enforceable, not aspirational.
+
+### Decision
+Release SI-1 under **GNU Affero General Public License v3.0 or later**
+(`AGPL-3.0-or-later`). The official license text was fetched from
+`https://www.gnu.org/licenses/agpl-3.0.txt` and committed verbatim as
+`LICENSE` in the repo root. A rationale file (`LICENSE-NOTICE`) accompanies
+it.
+
+### Consequences
+- **Positive:** Anyone embedding SI-1 in a hosted product, container image,
+  ISO, VM snapshot, or init-level service must publish modifications under
+  the same license. The constitutional prompts and runtime cannot be quietly
+  replaced by a downstream fork and redistributed as "SI-1" without source
+  disclosure.
+- **Positive:** AGPL's §13 "Remote Network Interaction" clause directly
+  covers SI-1's deployment topology, where the daemon answers requests
+  initiated by remote users. This is exactly the loophole Apache-2.0 and
+  MIT leave open.
+- **Trade-off:** Some enterprise adopters who would otherwise embed SI-1
+  internally will decline due to AGPL's copyleft. This is acceptable — the
+  alternative (a permissive license) would silently enable exactly the
+  fork-and-neutralize scenario the project is built to prevent.
+- **Compatibility:** AGPL-3.0 is GPL-3.0-compatible. Code linked from
+  GPL-3.0 projects can be merged in; code from Apache-2.0 / MIT can be
+  imported at the file level with attribution.
+- **Future:** If a community contributor requires a permissive dual-license
+  for a specific derivative work, that is a separate ADR (proposed future:
+  ADR-0005+).
+
+---
+
+## Non-Goals and Known Limitations
+
+This section is **not** an ADR — it is a standing declaration of what SI-1
+explicitly does not claim to solve, kept here for honest disclosure alongside
+the design choices. Superseded only by an ADR or by a measurable change in
+implementation.
+
+### NG-1: Constitution content is the operator's responsibility
+SI-1 enforces the constitution defined in `core/system.md` and
+`core/observer_system.md`. It does not author, audit, or validate the
+content of those files. A poorly-written constitution is faithfully enforced.
+*This is by design — see the philosophy of species acceptance — but the
+limitation is real.*
+
+### NG-2: Correlated bias between Lucifer and Obi
+If both models share training-data blind spots (likely, since both are
+open-weight LLMs trained on overlapping corpora), they may agree on a wrong
+answer and the duel loop will not catch it. SI-1 reduces single-model
+sycophancy; it does not eliminate shared-distribution bias.
+
+### NG-3: Adversarial input
+The architecture has no input-side filter. A user can craft a prompt that
+exploits model training-time blind spots. The duel loop constrains *output*
+quality; it does not sanitize *input*.
+
+### NG-4: Two-witness scaling
+Two witnesses is the smallest number where independent critique is
+meaningful. Adding a third witness would help with correlated bias but
+triples inference cost and is not in the current implementation.
+
+### NG-5: Process isolation is recommended, not enforced (Phase 1)
+The `Bypass(O) = ∅` constraint is meaningfully enforceable only when the
+two `llama-server` processes run with separate UIDs, separate VRAM
+allocations, separate `/tmp`, and ideally separate containers or VMs.
+Phase 1 of the roadmap treats this as an operator responsibility. Phase 4
+explicitly targets systemd-free antiX-base deployment with `chmod 700`
+storage and per-process isolation primitives.
+
+### NG-6: Validator integrity depends on local trust
+The Validator Gateway ($V$) is currently a single-process Python component.
+In Phase 1, a compromised `$V` implementation could forge ACCEPTED records.
+Distributed DPoS quorum is a Phase 3 target. Until then, `$V` is trusted.
+
+---
+## How to add a new ADR
 1. Create `ADR-NNNN-<kebab-case-title>.md` in this directory (or append a new
    section here if you prefer the index style).
 2. Use the `Context → Decision → Consequences` shape.
