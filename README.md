@@ -204,7 +204,7 @@ This ledger is not a standard RAG search store; it is the **immutable epistemic 
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/your-org/si1.git /opt/si1
+git clone https://github.com/arg-governance/si1.git /opt/si1
 cd /opt/si1
 
 # 2. Initialize Python virtual environment
@@ -346,6 +346,11 @@ python -m unittest discover -s tests -p "test_*.py" -v
 | **[core/observer_system.md](core/observer_system.md)** | **Obi Observer Prompt** | Obi's sibling mentor role, the Four-Hook Discipline Contract, stateless review constraints, and binary Peripheral Gate specifications. |
 | **[CHANGELOG.md](CHANGELOG.md)** | **Micro-Kernel Changelog** | Complete technical trajectory, duel loop hardening, token streaming fixes, and version history. |
 | **[LICENSE](LICENSE)** / **[LICENSE-NOTICE](LICENSE-NOTICE)** | **AGPL-3.0-or-later + Rationale** | Full license text + a one-page explanation of *why* AGPL-3.0 (network clause). |
+| **[SECURITY.md](SECURITY.md)** | **Security Policy** | How to report vulnerabilities; out-of-scope areas; cryptographic-hash roadmap. |
+| **[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)** | **Community Standards** | *Protokol Časne Saradnje* applied to human contributors; enforcement ladder. |
+| **[docs/SOCIAL.md](docs/SOCIAL.md)** | **GitHub Publication Kit** | Repo description, Topics, release-notes template, badges (copy-paste reference). |
+| **[docs/MODEL-NOTES.md](docs/MODEL-NOTES.md)** | **Model Discrepancy Notes** | Documents the E4B vs 12B empirical mix and proposes config-time locking. |
+| **[attacks/](attacks/)** | **Adversarial Test Prompts** | Five attack vectors targeting the four-hook contract, the constitutional constraint, and the observer-state isolation. Run manually through the kernel. |
 
 ---
 
