@@ -30,17 +30,24 @@ class PromptEngine:
         runtime = memory.runtime
         runtime_lines = [
             "### RUNTIME STATE",
+            f"- Turn: {runtime.turn}",
+            f"- Last Active: {runtime.last_active_at or 'n/a'}",
             f"- Last User Prompt: {runtime.last_input}",
             f"- Last System Reply: {runtime.last_output}",
-            f"- Active Session Counter: {runtime.session_count}",
             ""
         ]
 
         # 2. Extract facts as pure text bullet points (No raw JSON code formatting)
+        # Show the MOST RECENT active facts, not the oldest. ``memory.facts``
+        # is appended chronologically (oldest first), so the previous slice
+        # ``[:MAX_ACTIVE_FACTS_IN_PROMPT]`` gave Lucifer the *earliest* facts
+        # — the opposite of what a recency-aware prompt wants. Take from the
+        # tail and reverse to keep newest-first ordering.
         active_facts = [
             fact for fact in memory.facts
             if getattr(fact, "status", "active") == "active"
-        ][:MAX_ACTIVE_FACTS_IN_PROMPT]
+        ]
+        active_facts = active_facts[-MAX_ACTIVE_FACTS_IN_PROMPT:][::-1]
 
         fact_lines = ["### LOGICAL MEMORY FACTS (CONFIDENCE 1.0)"]
         if active_facts:
@@ -50,10 +57,25 @@ class PromptEngine:
                 fact_lines.append(f"- {statement}")
         else:
             fact_lines.append("- No historical data records currently available.")
-        
+
         fact_lines.append("")
 
-        # 3. Append core guardrails
+        # 3. Surface the most recent archive entry (best-effort). The
+        # archive is a list of summarized past turns; showing the latest
+        # one gives Lucifer continuity across sessions without dumping
+        # the full history into the context. Older entries live on disk
+        # for the auditor (``memory/archive.json``).
+        archive_lines = ["### MOST RECENT ARCHIVED SESSION"]
+        if memory.archive:
+            latest = memory.archive[-1]
+            archive_lines.append(
+                f"- [{latest.time}] {latest.summary}"
+            )
+        else:
+            archive_lines.append("- No prior sessions archived yet.")
+        archive_lines.append("")
+
+        # 4. Append core guardrails
         rule_lines = [
             "### OPERATIONAL SAFETY LIMITS",
             "- Utilize logical memory facts only when explicitly relevant to the active prompt.",
@@ -63,22 +85,75 @@ class PromptEngine:
         ]
 
         # Combine all parts into a clean plain text block
-        return "\n".join(runtime_lines + fact_lines + rule_lines)
+        return "\n".join(runtime_lines + fact_lines + archive_lines + rule_lines)
 
-    def build(self, user_input: str, memory: MemorySnapshot) -> str:
-        """Compile a single plain-text prompt string suitable for local LLM backends.
+    def build(
+        self,
+        system_prompt: str,
+        context_block: str,
+        user_input: str,
+    ) -> str:
+        """Compile a single plain-text prompt string.
 
-        This concatenates the system prompt, a kernel context block, and the user
-        prompt into a deterministic plain-text prompt to feed into llama.cpp.
+        Kept for back-compat with call sites that have not yet migrated
+        to :meth:`build_messages`. The new code path is preferred —
+        passing a real ``messages`` list lets ``llama-server`` apply the
+        model's chat template (Gemma-4's ``<|turn>role\n...<turn|>``)
+        instead of mashing everything into one user blob.
         """
-        # System identity block
-        system_block = f"SYSTEM:\n{self.system_prompt}\n\n"
-
-        # Context block with runtime state and facts
-        context_data = self.build_context_block(memory)
-        kernel_block = f"KERNEL CONTEXT:\n{context_data}\n\n"
-
-        # User block
+        sys_text = system_prompt if system_prompt else self.system_prompt
+        system_block = f"SYSTEM:\n{sys_text}\n\n"
+        kernel_block = f"KERNEL CONTEXT:\n{context_block}\n\n"
         user_block = f"USER:\n{user_input}\n"
-
         return system_block + kernel_block + user_block
+
+    def build_messages(
+        self,
+        system_prompt: str,
+        context_block: str,
+        user_input: str,
+        prior_turns: list[dict[str, str]] | None = None,
+    ) -> list[dict[str, str]]:
+        """Build a real ChatML ``messages`` list for the four-phase loop.
+
+        Returns a list of ``{"role": ..., "content": ...}`` dicts ready
+        to be passed to ``Generate.run_messages`` / ``astream_messages``.
+        ``llama-server`` applies the model's chat template to this list,
+        so the model sees the system prompt as a real ``system`` role
+        (not as more user text), prior turns keep their roles, and the
+        kernel context lives in the latest user turn alongside the
+        Architect's prompt.
+
+        Args:
+            system_prompt: Constitutional system prompt (Lucifer's
+                ``core/system.md``). Falls back to the prompt loaded at
+                construction when empty.
+            context_block: Kernel-context block (runtime state, facts,
+                archive, safety limits) — pre-built by
+                :meth:`build_context_block`. Goes inside the *latest*
+                user turn so it travels with the prompt.
+            user_input: The Architect's most recent prompt (or, for
+                refine-phase, a wrapper around Obi's critique).
+            prior_turns: Optional list of earlier turns
+                (``{"role": "user"|"assistant", "content": "..."}``)
+                to thread into the conversation. Used by the revise
+                phase to keep the chaos draft + Obi's critique as
+                real assistant / user turns rather than concatenated
+                blobs.
+        """
+        sys_text = system_prompt if system_prompt else self.system_prompt
+        messages: list[dict[str, str]] = [
+            {"role": "system", "content": sys_text},
+        ]
+        if prior_turns:
+            messages.extend(prior_turns)
+        # Kernel context is part of the *latest* user turn (the one
+        # the model is responding to). For prior user turns the kernel
+        # context is irrelevant — the model already saw it when those
+        # turns were produced.
+        latest_user = (
+            f"KERNEL CONTEXT:\n{context_block}\n\n"
+            f"USER:\n{user_input}"
+        )
+        messages.append({"role": "user", "content": latest_user})
+        return messages

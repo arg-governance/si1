@@ -36,7 +36,7 @@ class RegexFactExtractor(AbstractFactExtractor):
                 if not candidate:
                     continue
                 
-                # FIXED: Check the pattern type to avoid blinding pasting "I am" in front of system architecture facts
+                # Check the pattern type to avoid blindly pasting "I am" in front of system architecture facts
                 if "name" in pattern or "i am" in pattern or "call me" in pattern:
                     facts.append(f"I am {candidate}")
                 else:

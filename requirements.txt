@@ -1,5 +1,11 @@
-llama-cpp-python
-sentencepiece
-numpy
-huggingface_hub
-transformers
+# SI-1 runtime dependencies
+#
+# Core async I/O (required by runtime_components.MemoryStore, Logger, DuelLog)
+aiohttp>=3.9.0
+aiofiles>=23.2.0
+
+# In-process llama.cpp backend (only needed if config.LLM_BACKEND == "llama_cpp")
+# Currently the runtime uses config.LLM_BACKEND == "legacy_http" with two external
+# llama-server processes (port 666 for Lucifer, port 999 for Obi). Install this
+# only if you flip the backend back to in-process.
+# llama-cpp-python>=0.2.0

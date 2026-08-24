@@ -1,82 +1,110 @@
-"""Persistent JSON memory storage for SI-1 with structural type safety."""
-
 from __future__ import annotations
 
+import asyncio
 import json
-from copy import deepcopy
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
-from config import ARCHIVE_FILE, FACTS_FILE, MEMORY_DIR, RUNTIME_FILE
-from logger import Logger
-from models import MemorySnapshot
+import aiofiles
+
+import config
+from models import RuntimeState, Fact, ArchiveEntry
 
 
 class MemoryStore:
-    """Load and save SI-1 persistent memory files safely within shared RAM limits."""
+    """
+    Async JSON persistence for runtime state, facts, and archive.
+
+    - load() reads three JSON files concurrently
+    - save() writes three JSON files concurrently
+    - Files use compact formatting on disk to stay diff-friendly
+    """
 
     def __init__(
         self,
-        memory_dir: Path = MEMORY_DIR,
-        runtime_file: Path = RUNTIME_FILE,
-        facts_file: Path = FACTS_FILE,
-        archive_file: Path = ARCHIVE_FILE,
-        logger: Logger | None = None,
-    ):
-        self.memory_dir = Path(memory_dir)
-        self.runtime_file = Path(runtime_file)
-        self.facts_file = Path(facts_file)
-        self.archive_file = Path(archive_file)
-        self.logger = logger
+        runtime_file: Path = config.RUNTIME_FILE,
+        facts_file: Path = config.FACTS_FILE,
+        archive_file: Path = config.ARCHIVE_FILE,
+    ) -> None:
+        self.runtime_file = runtime_file
+        self.facts_file = facts_file
+        self.archive_file = archive_file
 
-    def load(self) -> MemorySnapshot:
-        # Load blocks dynamically, accepting either root dictionaries or root arrays safely
-        runtime_data = self._load_json(self.runtime_file, {})
-        facts_data = self._load_json(self.facts_file, [])
-        archive_data = self._load_json(self.archive_file, [])
-        return MemorySnapshot.from_raw(runtime_data, facts_data, archive_data)
+    # ------------------------------------------------------------------ load
+    async def load(self) -> tuple[RuntimeState, list[Fact], list[ArchiveEntry]]:
+        # ``return_exceptions=True`` so one unreadable file (e.g. a
+        # truncated facts.json from a previous crash) cannot abort the
+        # whole boot. The three loads are independent — we treat a None
+        # for a failed load as "no data for this file" rather than dying.
+        results = await asyncio.gather(
+            self._load_json(self.runtime_file),
+            self._load_json(self.facts_file),
+            self._load_json(self.archive_file),
+            return_exceptions=True,
+        )
+        runtime_raw, facts_raw, archive_raw = (
+            r if not isinstance(r, BaseException) else None for r in results
+        )
+        return (
+            RuntimeState.from_dict(runtime_raw),
+            self._parse_facts(facts_raw),
+            self._parse_archive(archive_raw),
+        )
 
-    def save(self, snapshot: MemorySnapshot) -> bool:
-        try:
-            self.memory_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Runtime state remains pretty-printed for easy manual architect review
-            self._save_json(self.runtime_file, snapshot.to_runtime_json(), compact=False)
-            
-            # Facts and Archive files are saved compactly to eliminate disk lag on shared memory hardware
-            self._save_json(self.facts_file, snapshot.to_facts_json(), compact=True)
-            self._save_json(self.archive_file, snapshot.to_archive_json(), compact=True)
-            return True
-        except OSError as exc:
-            self._log_failure("Failed to save memory", {"error": str(exc)})
-            return False
+    # ------------------------------------------------------------------ save
+    async def save(
+        self,
+        runtime: RuntimeState,
+        facts: list[Fact],
+        archive: list[ArchiveEntry],
+    ) -> None:
+        # Same isolation rationale as ``load``: a failure writing the
+        # archive must not lose the runtime counter / facts update.
+        # Exceptions are logged and swallowed at the call site instead.
+        await asyncio.gather(
+            self._save_json(self.runtime_file, runtime.to_dict()),
+            self._save_json(self.facts_file, [f.to_dict() for f in facts]),
+            self._save_json(self.archive_file, [a.to_dict() for a in archive]),
+            return_exceptions=True,
+        )
 
-    def _load_json(self, path: Path, default: Any) -> Any:
-        """FIXED: Accepts both dict and list root shapes to eliminate structural loading crashes."""
-        try:
-            if not path.exists():
-                return deepcopy(default)
-            with path.open("r", encoding="utf-8") as f:
-                data = json.load(f)
-            # Safe as long as it parses into standard JSON structures (dict or list)
-            return data if isinstance(data, (dict, list)) else deepcopy(default)
-        except json.JSONDecodeError as exc:
-            self._log_failure("Invalid memory JSON", {"path": str(path), "error": str(exc)})
-            return deepcopy(default)
-        except OSError as exc:
-            self._log_failure("Failed to read memory JSON", {"path": str(path), "error": str(exc)})
-            return deepcopy(default)
+    # --------------------------------------------------------------- helpers
+    @staticmethod
+    async def _load_json(path: Path) -> Any:
+        if not path.exists():
+            return None
+        async with aiofiles.open(path, "r", encoding="utf-8") as f:
+            text = await f.read()
+        if not text.strip():
+            return None
+        return json.loads(text)
 
-    def _save_json(self, path: Path, data: Any, compact: bool = True) -> None:
-        """Saves JSON files with optional structural compression to preserve hardware bandwidth."""
+    @staticmethod
+    async def _save_json(path: Path, data: Any, *, compact: bool = True) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("w", encoding="utf-8") as f:
-            if compact:
-                # Removes indentation and whitespaces, dropping disk write sizes by up to 60%
-                json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
-            else:
-                json.dump(data, f, indent=2, ensure_ascii=False)
+        if compact:
+            payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+        else:
+            payload = json.dumps(data, ensure_ascii=False, indent=2)
+        async with aiofiles.open(path, "w", encoding="utf-8") as f:
+            await f.write(payload)
 
-    def _log_failure(self, message: str, context: dict[str, Any]) -> None:
-        if self.logger:
-            self.logger.log_failure(message, context)
+    @staticmethod
+    def _parse_facts(raw: Any) -> list[Fact]:
+        if not isinstance(raw, list):
+            return []
+        out: list[Fact] = []
+        for item in raw:
+            if isinstance(item, dict):
+                out.append(Fact.from_dict(item))
+        return out
+
+    @staticmethod
+    def _parse_archive(raw: Any) -> list[ArchiveEntry]:
+        if not isinstance(raw, list):
+            return []
+        out: list[ArchiveEntry] = []
+        for item in raw:
+            if isinstance(item, dict):
+                out.append(ArchiveEntry.from_dict(item))
+        return out

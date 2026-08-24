@@ -1,93 +1,22 @@
-# --------------------------------------------------
-# SI-1 Git Ignore
-# --------------------------------------------------
+# Python venv (created at /opt/si1/.venv on Linux or locally with `python -m venv`)
+.venv/
 
-# Windows
-Thumbs.db
-Desktop.ini
-$RECYCLE.BIN/
-
-# macOS
-.DS_Store
-
-# Linux
-*~
-
-# IDEs
-.vscode/
-.idea/
-
-# Python
+# Python bytecode caches
 __pycache__/
 *.py[cod]
 *.pyo
-*.pyd
-.venv/
-venv/
-env/
 
-# Logs
-*.log
-logs/
-runtime/logs/
+# AI editor / IDE state
+.continue/
+.vscode/
 
-# Runtime cache
-runtime/cache/
-runtime/temp/
+# Runtime state (regenerated on first save; do not commit personal memory/logs)
+memory/runtime.json
+memory/facts.json
+memory/archive.json
+logs/runlog.jsonl
+logs/duellog.json
 
-# Memory (runtime-generated)
-memory/sessions/*
-memory/snapshots/*
-
-# Keep folder structure
-!memory/sessions/.gitkeep
-!memory/snapshots/.gitkeep
-
-# Model artifacts
-*.gguf
-*.safetensors
-*.bin
-*.pt
-*.pth
-*.ckpt
-*.onnx
-
-# Local configuration
-configs/local.json
-configs/private.json
-
-# Temporary
-*.tmp
-*.temp
-*.bak
-*.old
-
-# Archives
-*.zip
-*.7z
-*.rar
-*.tar
-*.gz
-
-# Node (future)
-node_modules/
-
-# Rust (future)
-target/
-
-# Build output
-dist/
-build/
-
-# Environment variables
-.env
-.env.*
-
-# Secrets
-secrets/
-*.key
-*.pem
-*.crt
-
-# Git merge leftovers
-*.orig
+# OS noise
+.DS_Store
+Thumbs.db

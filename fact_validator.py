@@ -34,7 +34,7 @@ class FactValidator:
     def validate(self, candidates: Iterable[str], existing: list[Fact]) -> FactValidationResult:
         result = FactValidationResult()
         
-        # FIXED: Uses getattr to safely read either 'statement' or 'text' properties dynamically
+        # Uses getattr to safely read either 'statement' or 'text' properties dynamically
         seen = {self._key(getattr(fact, "statement", getattr(fact, "text", str(fact)))) for fact in existing}
         next_id = max((getattr(fact, "id", 0) for fact in existing), default=0) + 1
 
@@ -54,7 +54,7 @@ class FactValidator:
 
             now = utc_timestamp()
             
-            # FIXED: Creates a Fact object that supports both 'statement' and fallback property mappings
+            # Creates a Fact object that supports both 'statement' and fallback property mappings
             fact_kwargs = {
                 "id": next_id,
                 "confidence": self.default_confidence,
@@ -62,11 +62,9 @@ class FactValidator:
                 "updated": now,
                 "status": "active",
             }
-            # Safely assigns string content to match whichever backend model format your system uses
-            if hasattr(Fact, "statement"):
-                fact_kwargs["statement"] = normalized
-            else:
-                fact_kwargs["text"] = normalized
+            # Assigns string content to the canonical 'statement' field.
+            # (Legacy 'text' alias is handled by Fact.from_dict on load, not here.)
+            fact_kwargs["statement"] = normalized
                 
             fact = Fact(**fact_kwargs)
             result.facts.append(fact)
@@ -85,7 +83,7 @@ class FactValidator:
         return normalized
 
     def _is_valid(self, text: str) -> bool:
-        """FIXED: Validates BOTH 'I am' identity declarations AND generic abstract structural truths."""
+        """Validates BOTH 'I am' identity declarations AND generic abstract structural truths."""
         if not text:
             return False
             
