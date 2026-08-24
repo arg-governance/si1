@@ -51,8 +51,14 @@ M_BASH_TOOL_SCHEMA = {
 
 # Default sampling parameters per role. These are sent with every /v1/chat/completions
 # request. Override per-request by passing `sampling=` to Generate.__init__.
+#
+# Chaos-phase temperature (0.4) is intentionally moderate: high enough to
+# produce varied drafts from Gemma-4-E4B-UD-Q4, low enough to keep the
+# unfiltered draft coherent enough that Obi's 4-hook critique has something
+# concrete to evaluate. Higher temperatures (>= 0.8) collapse to noise on
+# this model family.
 LUCIFER_SAMPLING = {
-    "temperature": 1.0,
+    "temperature": 0.4,
     "top-k": 64,
     "top-p": 0.95,
     "max_tokens": 1024,  # Changed from num_predict

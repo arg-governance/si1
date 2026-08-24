@@ -300,7 +300,7 @@ python -m unittest tests.test_loop_structure -v
 # Run messages pipeline and ThoughtRouter smoke tests
 python -m unittest tests.test_smoke_tests -v
 
-# Run complete test suite (25/25 tests passing)
+# Run complete test suite
 python -m unittest discover -s tests -p "test_*.py" -v
 ```
 
@@ -340,6 +340,8 @@ python -m unittest discover -s tests -p "test_*.py" -v
 | Document | Purpose | Key Content Covered |
 | :--- | :--- | :--- |
 | **[docs/architecture.md](docs/architecture.md)** | **Exhaustive Technical Specification** | Formal mathematical state model ($S_t$), layer function definitions ($R, O, V, H$), 6-step execution pipeline, 5-vector threat model ($T_1$–$T_5$), interface constraints, and Graphene sovereign OS micro-kernel. |
+| **[docs/decisions.md](docs/decisions.md)** | **Architecture Decision Records** | Dated ADR log (Context → Decision → Consequences) for every consequential design choice; supersedes forum posts and Slack threads. |
+| **[docs/WHAT-IS-SI1.md](docs/WHAT-IS-SI1.md)** | **One-Page Outsider Orientation** | Cold-reader TL;DR for engineers and researchers who have never seen the project. |
 | **[core/system.md](core/system.md)** | **Lucifer Constitutional Prompt** | Lucifer's identity, operational principles, reasoning protocols, compliance signatures (`[ALIGNED]:`), and behavioral hygiene. |
 | **[core/observer_system.md](core/observer_system.md)** | **Obi Observer Prompt** | Obi's sibling mentor role, the Four-Hook Discipline Contract, stateless review constraints, and binary Peripheral Gate specifications. |
 | **[CHANGELOG.md](CHANGELOG.md)** | **Micro-Kernel Changelog** | Complete technical trajectory, duel loop hardening, token streaming fixes, and version history. |

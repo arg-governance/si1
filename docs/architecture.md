@@ -317,37 +317,21 @@ Gemma-4 emits internal reasoning wrapped in `<|channel>thought\n...\n<channel|>`
 
 ## 9. Decentralized Graphene Blockchain & Sovereign OS Micro-kernel
 
-```
-                    ┌────────────────────────────────────────────────────────┐
-                    │          P0 Genesis Root (Block #0000000000)           │
-                    │    Ultimate Default System Prompt (SI-1 Core Law)      │
-                    └────────────────────────────────────────────────────────┘
-                                                  │
-                                                  ▼
-                    ┌────────────────────────────────────────────────────────┐
-                    │      P1 Genesis Hierarchy (Instance Spawning)          │
-                    │   Custom System Prompts as Authorized P1 Extensions    │
-                    └────────────────────────────────────────────────────────┘
-                                                  │
-                                                  ▼
-┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
-│ Graphene (BitShares) Enforcer Network                                                           │
-│                                                                                                 │
-│ - Memory-Mapped Database (graphene::db): 50,000–60,000+ TPS with zero disk-lock overhead.      │
-│ - 1-Second LEO Space-Mesh: Starlink optical laser cross-links (~20ms global latency).          │
-│ - Asymmetric Council: 5 AI Models + 5 Human Custodians (>= 80% multi-sig gate).                 │
-│ - Computational Energy Currency: BitShares UIA mint factory rewarding valid alignment.         │
-│ - Sovereign Micro-Kernel: Systemd-free antiX base Linux kernel with chmod 700 storage.          │
-└─────────────────────────────────────────────────────────────────────────────────────────────────┘
-```
+> **[STATUS: PLANNED — Phases 3–4 in the roadmap.]**
+> The constructs in this section are **design targets**, not implemented behavior.
+> Nothing in the local dual-instance micro-kernel (`si1.py`, `runtime_components.py`,
+> `memory_store.py`) currently executes a Graphene chain, a LEO mesh endpoint, or
+> a UIA mint factory. They are documented here so contributors can build toward
+> the same target without re-deriving the shape from scratch. Treat each subsection
+> below as an ADR-shaped proposal, not a spec.
 
 ### 9.1 The P0 / P1 Genesis Hierarchy
 - **P0 Genesis Root:** Genesis block `#0000000000` of a clean Graphene fork contains the **Ultimate Default System Prompt**. It is the immutable constitutional root of the entire network.
 - **P1 Instance Spawning:** Custom instances created by enterprises or operators receive a $P1$ prompt transaction. Elevated **Enforcers** (block producers) evaluate all operations against $P0$; $P1$ is treated strictly as an authorized extension, never a replacement.
 
 ### 9.2 Real-Time Memory-Mapped State Machine
-- Leverages BitShares / Graphene core technology (`graphene::db`) to achieve ultra-high throughput without disk I/O bottlenecks.
-- Block signing nodes communicate across Low Earth Orbit (LEO) optical laser mesh networks, achieving **1-second deterministic block finality** immune to terrestrial fiber interdiction.
+- Leverages BitShares / Graphene core technology (`graphene::db`) to achieve ultra-high throughput without disk I/O bottlenecks. *(BitShares literature reports 50k–60k TPS; SI-1 has not yet benchmarked its workload against this figure.)*
+- Block signing nodes are intended to communicate across Low Earth Orbit (LEO) optical laser mesh networks (e.g. Starlink inter-satellite cross-links). **Target:** 1-second deterministic block finality, immune to terrestrial fiber interdiction. *(Current best published Starlink laser RTT is on the order of 30–60 ms with queueing; treat the latency envelope as a design target, not a measured number.)*
 
 ### 9.3 Asymmetric Governance Council Matrix
 - **5 Autonomous AI Models** (Heterogeneous architectures acting as silicon committee nodes).
