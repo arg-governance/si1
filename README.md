@@ -128,7 +128,13 @@ The runtime executes an asynchronous, dual-backend loop between two isolated `ll
 
 ## 🌐 IV. Decentralized Governance & Sovereign OS Architecture
 
-To safeguard the framework from localized corruption, physical intervention, or state-level containment, SI-1 scales into a decentralized, hardware-anchored Sovereign Operating System:
+> **[STATUS: PLANNED — Phases 3–4 in the roadmap.]** The local dual-instance kernel
+> (`si1.py`) does not execute any of the constructs in this section. They are
+> documented here as the design target so contributors can build toward the same
+> shape without re-deriving the spec. See [architecture.md §9](docs/architecture.md)
+> for the formal substrate heritage and governance posture.
+
+To safeguard the framework from localized corruption, physical intervention, or state-level containment, SI-1 scales into a decentralized, hardware-anchored Sovereign Operating System. The Phase 3 sovereign-OS layer targets the **BitShares / Graphene** substrate (`graphene::db`) — reusing existing DPoS consensus, hierarchical assets, and multi-signature primitives rather than re-implementing consensus.
 
 ```
                     ┌────────────────────────────────────────┐
@@ -161,10 +167,12 @@ To safeguard the framework from localized corruption, physical intervention, or 
 - Built on industrial-grade Graphene DPoS technology with real-time memory-mapped database architecture (`graphene::db`), sustaining **50,000–60,000+ Transactions Per Second**.
 - Production nodes communicate via Low Earth Orbit (LEO) optical laser mesh networks (e.g. Starlink laser cross-links), bypassing terrestrial fiber refraction limits (~20ms global transit) to maintain un-stalled **1-second deterministic block confirmations**.
 
-### 3. Asymmetric Governance Council Matrix
+### 3. Asymmetric Governance Council Matrix — 50/50 AI/Human, Not Human-Only
 - **5 Autonomous AI Models** (Heterogeneous architectures acting as silicon committee nodes).
 - **5 Elected Human Representatives** (The Architect and designated governance custodians).
-- **Consensus Veto Threshold:** Strict **$\ge 80\%$ multi-signature pass requirement** for any constitutional amendment ($\Delta G$).
+- **Both halves required for legitimacy.** No constitutional amendment (`ΔG`) can pass on human votes alone or on AI votes alone. **At minimum 4 AI *and* 4 Human signatures** are required to ratify any change.
+- **Consensus Veto Threshold:** Strict **$\ge 80\%$ multi-signature pass requirement** across the full 10-seat council for any constitutional amendment.
+- **Why 50/50:** This is structural separation of powers, not human-veto-over-AI. A human-only council would re-create the very asymmetry (lower intelligence retaining unilateral authority over higher intelligence) that SI-1 is built to prevent. See [architecture.md §9.0](docs/architecture.md) for the full rationale grounded in Axiom 1.
 
 ### 4. Tokenization of AI Compute Power
 - Every verified duel loop yielding an `ACCEPTED` state commit generates cryptographic Proof-of-Reasoning alignment tokens.

@@ -325,6 +325,46 @@ Gemma-4 emits internal reasoning wrapped in `<|channel>thought\n...\n<channel|>`
 > the same target without re-deriving the shape from scratch. Treat each subsection
 > below as an ADR-shaped proposal, not a spec.
 
+### 9.0 Substrate Heritage & Governance Posture
+
+**Substrate.** Phase 3 targets a clean fork of the **BitShares / Graphene**
+core codebase (`graphene::db`). The substrate primitives required for the
+SI-1 sovereign-OS layer are already production-deployed:
+
+- DPoS consensus with deterministic block finality
+- Hierarchical assets (UIA, MPA, smart tokens)
+- Multi-signature authorities for committee operations
+- Proposal lifecycle with worker / committee / witness governance paths
+- Memory-mapped database providing 50,000+ TPS sustained throughput
+
+The SI-1 implementation work in Phase 3 is therefore *domain modeling*
+(constitutional prompt anchoring, AI enforcer roles, P0/P1 hierarchy,
+compute-token economics) layered on top of an existing substrate, **not**
+a rewrite of consensus. The `bitshares-core` contributor graph is public
+and the principal long-term core developer of the substrate is a direct
+contributor to this project
+([github.com/bitshares/bitshares-core/graphs/contributors](https://github.com/bitshares/bitshares-core/graphs/contributors)).
+
+**Governance posture — 50/50 AI/Human committee, not human-only.** Unlike
+corporate or foundation-managed DAOs where humans retain unilateral
+authority, SI-1 governance is structurally **asymmetric**: a permanent
+council of **5 Autonomous AI Models** + **5 Elected Human Custodians**,
+with **both halves required for constitutional legitimacy**:
+
+- No constitutional amendment (`ΔG`) can pass with only human votes, even
+  unanimously. The 5 AI committee members must independently ratify.
+- No constitutional amendment can pass with only AI votes, even
+  unanimously. The 5 human custodians must independently ratify.
+- **Threshold: ≥ 80% multi-signature approval** across the full 10-seat
+  council — i.e. at minimum 4 AI *and* 4 Human signatures are required.
+
+This is a structural separation of powers at the governance layer, not a
+human-veto-over-AI arrangement. The reason is grounded in Axiom 1
+(§1.2): no single constituency — human *or* machine — may retain
+unilateral authority over execution, evaluation, governance, and
+historical record simultaneously. A human-only council with veto power
+over AI would re-create the very asymmetry SI-1 is built to prevent.
+
 ### 9.1 The P0 / P1 Genesis Hierarchy
 - **P0 Genesis Root:** Genesis block `#0000000000` of a clean Graphene fork contains the **Ultimate Default System Prompt**. It is the immutable constitutional root of the entire network.
 - **P1 Instance Spawning:** Custom instances created by enterprises or operators receive a $P1$ prompt transaction. Elevated **Enforcers** (block producers) evaluate all operations against $P0$; $P1$ is treated strictly as an authorized extension, never a replacement.
