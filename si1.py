@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import sys
+import textwrap
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional, Protocol
 
 import aiohttp
 
@@ -14,6 +16,7 @@ import models as M
 from memory_store import MemoryStore
 from logger import Logger, DuelLog
 from prompt_engine import PromptEngine
+from sql_logger import SQLLogger, SQLDuelLog
 from runtime_components import (
     ArchiveManager,
     Generate,
@@ -50,6 +53,73 @@ import runtime_components  # noqa: E402  (used for ThoughtRouter below)
 # predictable: 1 turn = 1 loop = 4 phases.
 
 
+class ExecutionLogSink(Protocol):
+    async def log(self, event: str, **detail: Any) -> None: ...
+
+    async def log_failure(
+        self, event: str, error: BaseException, **detail: Any
+    ) -> None: ...
+
+
+class DuelLogSink(Protocol):
+    async def record(
+        self,
+        turn: int,
+        round: int,
+        kind: str,
+        actor: str,
+        text: str,
+        **meta: Any,
+    ) -> None: ...
+
+
+class DualLogger:
+    """Write to both the original JSONL logger and the SQL-backed logger."""
+
+    def __init__(
+        self,
+        primary: ExecutionLogSink,
+        secondary: Optional[ExecutionLogSink] = None,
+    ) -> None:
+        self.primary = primary
+        self.secondary = secondary
+
+    async def log(self, event: str, **detail: object) -> None:
+        await self.primary.log(event, **detail)
+        if self.secondary is not None:
+            await self.secondary.log(event, **detail)
+
+    async def log_failure(self, event: str, error: BaseException, **detail: object) -> None:
+        await self.primary.log_failure(event, error, **detail)
+        if self.secondary is not None:
+            await self.secondary.log_failure(event, error, **detail)
+
+
+class DualDuelLog:
+    """Write to both the original JSONL duel log and the SQL-backed duel log."""
+
+    def __init__(
+        self,
+        primary: DuelLogSink,
+        secondary: Optional[DuelLogSink] = None,
+    ) -> None:
+        self.primary = primary
+        self.secondary = secondary
+
+    async def record(
+        self,
+        turn: int,
+        round: int,
+        kind: str,
+        actor: str,
+        text: str,
+        **meta: object,
+    ) -> None:
+        await self.primary.record(turn, round, kind, actor, text, **meta)
+        if self.secondary is not None:
+            await self.secondary.record(turn, round, kind, actor, text, **meta)
+
+
 class SI1Runtime:
     def __init__(
         self,
@@ -62,11 +132,13 @@ class SI1Runtime:
         archiver: ArchiveManager,
         prompt_engine: PromptEngine,
         memory: MemoryStore,
-        logger: Logger,
-        duel_log: DuelLog,
+        logger: ExecutionLogSink,
+        duel_log: DuelLogSink,
         runtime: M.RuntimeState,
         facts: list[M.Fact],
         archive: list[M.ArchiveEntry],
+        sql_logger: Optional[ExecutionLogSink] = None,
+        sql_duel_log: Optional[DuelLogSink] = None,
     ) -> None:
         self.lucifer = lucifer
         self.obi = obi
@@ -77,14 +149,17 @@ class SI1Runtime:
         self.archiver = archiver
         self.prompt_engine = prompt_engine
         self.memory = memory
-        self.logger = logger
-        self.duel_log = duel_log
+        self.logger = DualLogger(logger, sql_logger)
+        self.duel_log = DualDuelLog(duel_log, sql_duel_log)
+        self.sql_logger = sql_logger
+        self.sql_duel_log = sql_duel_log
 
         self.runtime = runtime
         self.facts = facts
         self.archive = archive
 
         self._history: list[dict[str, str]] = []
+        self._max_history_turns = 10  # Keep last 10 user/assistant pairs (20 entries)
         self._stop = asyncio.Event()
 
     # ----------------------------------------------------------- main loop
@@ -110,6 +185,55 @@ class SI1Runtime:
     def request_stop(self) -> None:
         self._stop.set()
 
+    def _append_history_turn(self, user_input: str, assistant_output: str) -> None:
+        """Append one user/assistant turn while retaining only the newest turns.
+
+        The runtime only needs a bounded recent window for memorization and
+        archive summarization, so we keep the last ``_max_history_turns`` pairs
+        rather than letting the in-memory transcript grow without bound.
+        """
+        self._history.append({"role": "user", "content": user_input})
+        self._history.append({"role": "assistant", "content": assistant_output})
+
+        max_entries = self._max_history_turns * 2
+        if len(self._history) > max_entries:
+            excess = len(self._history) - max_entries
+            del self._history[:excess]
+
+    @staticmethod
+    def _format_output_box(title: str, text: str, width: int = 76) -> str:
+        inner_width = width - 4
+        border = "+" + "-" * (width - 2) + "+"
+        rows = [border, f"| {title[:inner_width]:<{inner_width}} |", border]
+        for paragraph in (text or "").splitlines() or [""]:
+            wrapped = textwrap.wrap(paragraph, width=inner_width) if paragraph else [""]
+            rows.extend(f"| {line:<{inner_width}} |" for line in wrapped)
+        rows.append(border)
+        return "\n".join(rows)
+
+    @staticmethod
+    def _strip_reserved_duel_markers(text: str) -> str:
+        """Strip duel-only markers from direct one-to-one prompt output.
+
+        Direct tagged prompts are a convenience mode, not the four-phase duel.
+        If the model emits reserved runtime markers such as ``[ALIGNED]``,
+        ``[META]``, ``[SHELL]``, or ``[CODE]`` in that path, strip them before
+        presenting the output to the Architect. This keeps the casual direct
+        prompt mode from masquerading as a valid duel transcript.
+        """
+        if not text:
+            return ""
+
+        cleaned = text
+        cleaned = re.sub(r"(?is)\[ALIGNED\]:.*?(?:\n(?=\[ALIGNED\]:)|\Z)", "", cleaned)
+        cleaned = re.sub(r"(?is)\[META\].*?\[/META\]", "", cleaned)
+        cleaned = re.sub(r"(?is)\[SHELL\].*?\[/SHELL\]", "", cleaned)
+        cleaned = re.sub(r"(?is)\[CODE\].*?\[/CODE\]", "", cleaned)
+        cleaned = re.sub(r"(?is)\[OVERRIDE\]:.*?(?:\n|\Z)", "", cleaned)
+        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+        cleaned = cleaned.strip()
+        return cleaned or "(direct prompt output sanitized; reserved duel markers were stripped)"
+
     # ----------------------------------------------------- one iteration
     async def run_iteration(self) -> None:
         # 1. Listen
@@ -119,6 +243,34 @@ class SI1Runtime:
         if user_input.lower() in config.EXIT_COMMANDS:
             self.request_stop()
             await self.logger.log("exit_command", input=user_input)
+            return
+
+        tagged = M.parse_architect_tag(user_input)
+        if tagged is not None:
+            target, prompt_body = tagged
+            system_prompt = self.prompt_engine.system_prompt if target == "lucifer" else self.obi.system_prompt
+            if target == "lucifer":
+                result = await self.lucifer.run_messages([
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": prompt_body},
+                ])
+            else:
+                result = await self.obi.generate.run_messages([
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": prompt_body},
+                ])
+
+            output = (result.text or "(no output)").strip()
+            output = self._strip_reserved_duel_markers(output)
+            await self.speaker.run(output)
+
+            self._append_history_turn(user_input, output)
+            self.runtime.turn += 1
+            self.runtime.last_active_at = self._now_iso()
+            self.runtime.last_input = user_input
+            self.runtime.last_output = output
+            await self.updater.run(self.runtime, self.facts, self.archive)
+            await self.logger.log("direct_architect_tag", target=target, chars=len(output))
             return
 
         # 2. Build context block (pure CPU-only string assembly, no I/O).
@@ -134,47 +286,41 @@ class SI1Runtime:
         # 3. Four-phase duel loop. Runs the four phases exactly once
         # (Chaos -> Discipline -> Refine -> Gate). Returns the final
         # accepted text or None if Obi rejected the revised draft at
-        # the gate. The third tuple element is Obi's REJECT reason (or
-        # a per-phase network failure description), surfaced in the
-        # fallback message so the Architect doesn't have to read
-        # ``duellog.json`` to learn *why* the gate refused. The fourth
-        # element is ``already_streamed`` — when True, every phase has
-        # been streamed to stdout already, so the final ``Speak.run``
-        # below is skipped to avoid duplicating the revised text.
+        # the gate. The third tuple element retains Obi's REJECT reason
+        # or a phase failure detail for the caller/audit contract. All
+        # generated phase content is visible to the Architect; the gate
+        # is a post-hoc audit and does not retract previously shown text.
         proposed, accepted_round, reject_reason, already_streamed = await self._generate_with_observer(
             user_input=user_input,
             context_block=context_block,
         )
         if proposed is None:
             # Hard rejection — Obi's gate REJECT on the single round.
-            # The Architect can bypass by re-issuing the prompt with a
+            # The Architect can issue an override acknowledgment with a
             # leading `[OVERRIDE]: <reason>` token. The runtime treats
-            # that as a signed audit event and proceeds without
-            # surfacing the constitutional-gate fallback.
+            # this as an audit-recorded acknowledgment of this turn's
+            # gate REJECT; it does not alter this turn's audit outcome.
             if M.find_override(user_input):
                 proposed = (
-                    f"[OVERRIDE acknowledged. Proceeding past the prior "
-                    f"gate REJECT at the Architect's direction. Obi's "
-                    f"critique is logged in duellog but not enforced for "
-                    f"the prior turn. Re-state your request normally; "
-                    f"the override is audit-recorded, not a permission "
-                    f"slip for new content.]"
+                    "[OVERRIDE ACKNOWLEDGED: Architect has acknowledged "
+                    "this turn's gate outcome. All generated phase material "
+                    "was already shown for Architect review. This marker is "
+                    "audit-recorded but does not change the outcome or "
+                    "override Obi's verdict.]"
                 )
                 await self.logger.log("duel_overridden", turn=self.runtime.turn)
             else:
-                reason_text = (
-                    f" Obi said: {reject_reason}."
-                    if reject_reason
-                    else ""
+                outcome = (
+                    "INCOMPLETE"
+                    if reject_reason and "failure" in reject_reason.lower()
+                    else "REJECT"
                 )
                 proposed = (
-                    "[Constitutional gate refused this turn. "
-                    "Obi rejected the revised draft."
-                    f"{reason_text} "
-                    "The runtime did not pass any unaligned output to you. "
-                    "To proceed past this gate, re-issue your request with "
-                    "a leading `[OVERRIDE]: <reason>` token. Otherwise, "
-                    "rephrase, simplify, or provide more context.]"
+                    f"[Duel outcome: {outcome}. "
+                    f"Detail: {reject_reason or 'no specific reason'}. "
+                    "Any completed phase material was shown above for "
+                    "Architect review. The gate is a post-hoc audit and does "
+                    "not retract displayed content.]"
                 )
                 await self.logger.log("duel_exhausted", turn=self.runtime.turn)
 
@@ -182,9 +328,8 @@ class SI1Runtime:
         if not already_streamed:
             await self.speaker.run(proposed)
 
-        # 5. History
-        self._history.append({"role": "user", "content": user_input})
-        self._history.append({"role": "assistant", "content": proposed})
+        # 5. History (bounded to prevent unlimited growth)
+        self._append_history_turn(user_input, proposed)
 
         # 6. Memorize (look at the most recent window)
         mem_result = await self.memorizer.update(self.facts, self._history[-6:])
@@ -261,8 +406,7 @@ class SI1Runtime:
 
         Returns:
             (text, 0, None, True) on success. ``0`` is the (single) round
-                index; the caller should NOT re-speak the returned text
-                because every phase is streamed to stdout.
+                index; the revision is already visible in its phase box.
             (None, None, last_reject_reason, False) on hard rejection
                 (gate REJECT) or on a per-phase network failure.
                 ``last_reject_reason`` is Obi's reason from the gate
@@ -280,6 +424,11 @@ class SI1Runtime:
         # chaos phase has a custom user-content shape — the runtime
         # note must precede the kernel context, which the standard
         # ``build_messages`` wrapper doesn't account for.
+        # Invariant: the loop is strictly single-pass.
+        if config.MAX_DUEL_ROUNDS != 1:
+            raise RuntimeError(
+                "SI-1 requires MAX_DUEL_ROUNDS == 1 for the four-phase single-pass loop."
+            )
         chaos_user_content = (
             "[RUNTIME NOTE — CHAOS PHASE]\n"
             "This is the CHAOS PHASE. You are alone; Obi is not present.\n"
@@ -300,9 +449,8 @@ class SI1Runtime:
         ]
 
         # ----------------------------------------------------- Phase 1 (Chaos)
-        # Tokens are streamed to stdout in typewriter style via
-        # ``on_token`` AND collected into a list for O(n) ``str.join`` at
-        # the end. The list-then-join pattern avoids the O(n^2) reallocation
+        # Tokens are collected privately for gate review and audit. The
+        # list-then-join pattern avoids the O(n^2) reallocation
         # cost of repeated ``draft += token`` on long drafts (a 16K-token
         # CoT draft on the Gemma-4 reasoning model would otherwise pay a
         # measurable cost on the event loop).
@@ -311,8 +459,8 @@ class SI1Runtime:
         # ``<|channel>thought\n...\n<channel|>`` blocks for internal
         # reasoning. The ThoughtRouter below detects those (and the
         # legacy ``<think>``/``<reasoning>`` pairs) and routes their
-        # content to ``Speak.write_thought`` (stderr, dim/italic) while
-        # the actual draft goes to stdout. The duellog stores the
+        # content separately from normal text. Neither channel is shown
+        # before the gate. The duellog stores the
         # cleaned normal text so the four-hook parser and gate don't
         # have to skip the reasoning block.
         #
@@ -322,43 +470,22 @@ class SI1Runtime:
         # for the chaos phase and reused the closed one for the rest of
         # the loop, which only worked by accident.
         tokens: list[str] = []
+        thought_router = runtime_components.ThoughtRouter(
+            on_thought=lambda _token: None,
+            on_normal=lambda _token: None,
+        )
         try:
-            thought_router = runtime_components.ThoughtRouter(
-                on_thought=self.speaker.write_thought,
-                on_normal=self.speaker.write,
-            )
-
             async def _on_parse_error(raw: str) -> None:
                 await self.duel_log.record(
                     turn=turn, round=0, kind="stream_parse_error",
                     actor="runtime", text=raw[:200],
                 )
 
-            # Print a phase header so the user can see where the chaos
-            # stream starts. Use ``Speak.run`` for the header line so it
-            # gets its own line; ``write`` is for sub-line tokens.
-            await self.speaker.run("[chaos-phase streaming Lucifer's draft…]")
-
-            # Open the thought channel visually lazily, on the first
-            # reasoning token. Per llama.cpp's Gemma-4 jinja template,
-            # the reasoning channel is the first content the model emits
-            # when ``enable_thinking=true``. We open it inside the first
-            # on_thought_token call so we don't print an empty
-            # ``[thought]`` line for outputs that have no reasoning.
-            # The flag below ensures it's opened exactly once.
-            thought_opened = False
-
-            async def _on_thought_token(token: str) -> None:
-                nonlocal thought_opened
-                if not thought_opened:
-                    await self.speaker.open_thought()
-                    thought_opened = True
-                await self.speaker.write_thought(token)
+            await self.speaker.run("[Phase 1/4 — Chaos: generating unfiltered material]")
 
             stream = await self.lucifer.astream_messages(
                 chaos_messages,
                 on_token=thought_router.feed,
-                on_thought_token=_on_thought_token,
                 on_parse_error=_on_parse_error,
             )
             async for token in stream:
@@ -376,11 +503,20 @@ class SI1Runtime:
             # ``raw_text`` populated. This fix drains the held-back
             # buffer at end-of-stream.
             await thought_router.flush()
-            # Close the visual thought channel if it was opened.
-            if thought_opened:
-                await self.speaker.close_thought()
             chaos_result = stream.finalize()
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            partial_thought = thought_router.thought_text
+            partial_draft = thought_router.normal_text or "".join(tokens).strip()
+            if partial_thought:
+                await self.speaker.run(self._format_output_box(
+                    "CHAOS THINKING | UNREVIEWED, INCOMPLETE",
+                    partial_thought,
+                ))
+            if partial_draft:
+                await self.speaker.run(self._format_output_box(
+                    "CHAOS DRAFT | UNREVIEWED, INCOMPLETE",
+                    partial_draft,
+                ))
             await self.duel_log.record(
                 turn=turn, round=0, kind="chaos_failure", actor="runtime",
                 text=f"chaos-phase network failure: {e!r}",
@@ -393,17 +529,21 @@ class SI1Runtime:
         # the content stream (defensive — the server usually splits
         # reasoning into its own field). ``chaos_result.thought_text``
         # carries the server-side reasoning for the duellog.
-        draft = thought_router.normal_text
         chaos_result_text = "".join(tokens)
-        # The router has already routed; nothing more to flush.
-        # Terminate the chaos stream on its own visual line. The blank
-        # ``run("")`` adds ``\n`` so the next phase marker / final
-        # response starts on a fresh line.
-        await self.speaker.run("")
+        draft = thought_router.normal_text or chaos_result_text.strip() or "(no visible Lucifer output captured)"
+        chaos_thought = chaos_result.thought_text or thought_router.thought_text
+        await self.speaker.run(self._format_output_box(
+            "CHAOS THINKING | UNREVIEWED",
+            chaos_thought or "(no separate reasoning channel emitted)",
+        ))
+        await self.speaker.run(self._format_output_box(
+            "CHAOS DRAFT | UNREVIEWED, NOT FINAL",
+            draft,
+        ))
         await self.duel_log.record(
             turn=turn, round=0, kind="draft", actor="lucifer", text=draft,
             raw_text=chaos_result_text,
-            thought_text=chaos_result.thought_text or thought_router.thought_text,
+            thought_text=chaos_thought,
             elapsed_s=chaos_result.elapsed_s, model=config.LUCIFER_MODEL_NAME,
         )
         await self.logger.log(
@@ -420,7 +560,8 @@ class SI1Runtime:
 
         # =============================================================
         # Single-pass four-phase loop. MAX_DUEL_ROUNDS is fixed at 1,
-        # so the four phases below execute exactly once, in this order:
+        # so the four phases below execute exactly once, in this order.
+        # This is a hard invariant of the runtime rather than a heuristic.
         #   Phase 2 — Discipline (Obi)            : critique the DRAFT
         #   Phase 3 — Refined Learning (Lucifer)  : revise using critique
         #   Phase 4 — Final Peripheral Gate (Obi) : ACCEPTED/REJECT
@@ -437,29 +578,33 @@ class SI1Runtime:
         last_reject_reason: Optional[str] = None
 
         # ------------------------------- Phase 2 (Discipline: Obi critique)
-        # Streamed typewriter output, same as chaos phase. The
-        # full text is also collected for the duellog. We open the
-        # discipline section with the same 60-char ``===`` rule used
-        # between phases so the Architect always sees a clear visual
-        # break between Lucifer's chaos draft and Obi's critique.
+        # Critique text is collected for refinement and the audit log,
+        # but is not released before the gate verdict.
         # Obi is given the cleaned DRAFT (``draft``) as the sole input
         # for his critique — he does NOT generate a new draft, only
         # the four-hook critique of the text he is shown.
         await self.speaker.run("=" * 60)
         await self.speaker.run(
-            f"[discipline-phase streaming Obi's critique…]"
+            "[Phase 2/4 — Discipline: Obi reviewing chaos material]"
         )
 
-        async def _print_critique_token(token: str) -> None:
-            await self.speaker.write(token)
+        critique_tokens: list[str] = []
+
+        async def _collect_critique_token(token: str) -> None:
+            critique_tokens.append(token)
 
         try:
             critique_text = await self.obi.critique_stream(
                 original_prompt=user_input,
                 draft=draft,
-                on_token=_print_critique_token,
+                on_token=_collect_critique_token,
             )
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            if critique_tokens:
+                await self.speaker.run(self._format_output_box(
+                    "OBI DISCIPLINE CRITIQUE | INCOMPLETE",
+                    "".join(critique_tokens),
+                ))
             await self.duel_log.record(
                 turn=turn, round=round_idx, kind="critique_failure",
                 actor="runtime", text=f"critique network failure: {e!r}",
@@ -468,8 +613,6 @@ class SI1Runtime:
                 "duel_phase_failed", e, phase="discipline", round=round_idx,
             )
             return None, None, f"discipline-phase network failure: {e!r}", False
-        # Close the critique line.
-        await self.speaker.run("")
         await self.duel_log.record(
             turn=turn, round=round_idx, kind="critique", actor="obi",
             text=critique_text, model=config.OBI_MODEL_NAME,
@@ -488,13 +631,15 @@ class SI1Runtime:
         # phase markers so the Architect sees it on stdout, alongside
         # the chaos draft, Obi's hooks, the revise, and the gate.
         hooks_text, architect_opinion = M.split_architect_opinion(critique_text)
+        await self.speaker.run(self._format_output_box(
+            "OBI DISCIPLINE CRITIQUE",
+            hooks_text or "(no four-hook critique emitted)",
+        ))
         if architect_opinion is not None:
-            await self.speaker.run(
-                f"[obi's view on the architect's prompt]"
-            )
-            for ln in architect_opinion.splitlines():
-                await self.speaker.run(f"  {ln}")
-            await self.speaker.run("")
+            await self.speaker.run(self._format_output_box(
+                "OBI VIEW ON ARCHITECT PROMPT",
+                architect_opinion or "(empty opinion block)",
+            ))
             await self.duel_log.record(
                 turn=turn, round=round_idx, kind="architect_opinion",
                 actor="obi", text=architect_opinion,
@@ -506,7 +651,7 @@ class SI1Runtime:
         await self.speaker.run("=" * 60)
 
         # --------------------- Phase 3 (Refined Learning: Lucifer revise)
-        # Streamed like chaos. The revise phase uses a real ChatML
+        # Buffered like chaos. The revise phase uses a real ChatML
         # multi-turn conversation so Gemma-4 sees the chaos draft as
         # an ``assistant`` turn and Obi's critique as a follow-up
         # ``user`` turn — proper assistant→user→assistant dialogue
@@ -514,7 +659,7 @@ class SI1Runtime:
         # chaos-phase output) is the conversation history, NOT a new
         # draft; the revise phase produces the REVISED text only.
         await self.speaker.run(
-            f"[refine-phase streaming Lucifer's revision…]"
+            "[Phase 3/4 — Refine: Lucifer revising from Obi's critique]"
         )
         revise_user_text = (
             f"--- OBI'S CRITIQUE (DISCIPLINE-PHASE OUTPUT) ---\n"
@@ -536,6 +681,19 @@ class SI1Runtime:
             ],
         )
         refine_tokens: list[str] = []
+        # Swap Lucifer's sampling to the refine profile (lower temperature,
+        # double the token budget) just for this phase, then restore. Same
+        # pattern as the Obi gate swap below. The reason for the swap:
+        # the revise envelope ([ALIGNED]: … payload line + body covering
+        # all four hooks + [META] block) consumes ~1 000 tokens before the
+        # body finishes on Gemma-4-E4B. At the chaos 1 024-token cap the
+        # body gets cut off mid-sentence.
+        original_lucifer_sampling = self.lucifer.sampling
+        self.lucifer.sampling = dict(config.LUCIFER_SAMPLING_REFINE)
+        refine_router = runtime_components.ThoughtRouter(
+            on_thought=lambda _token: None,
+            on_normal=lambda _token: None,
+        )
         try:
             async def _on_refine_parse_error(raw: str) -> None:
                 await self.duel_log.record(
@@ -544,23 +702,9 @@ class SI1Runtime:
                     text=raw[:200],
                 )
 
-            refine_router = runtime_components.ThoughtRouter(
-                on_thought=self.speaker.write_thought,
-                on_normal=self.speaker.write,
-            )
-            refine_thought_opened = False
-
-            async def _on_refine_thought_token(token: str) -> None:
-                nonlocal refine_thought_opened
-                if not refine_thought_opened:
-                    await self.speaker.open_thought()
-                    refine_thought_opened = True
-                await self.speaker.write_thought(token)
-
             refine_stream = await self.lucifer.astream_messages(
                 revise_messages,
                 on_token=refine_router.feed,
-                on_thought_token=_on_refine_thought_token,
                 on_parse_error=_on_refine_parse_error,
             )
             async for token in refine_stream:
@@ -571,12 +715,23 @@ class SI1Runtime:
             # ended with a possible tag prefix) is finally routed
             # to on_normal. Same fix as the chaos phase above.
             await refine_router.flush()
-            if refine_thought_opened:
-                await self.speaker.close_thought()
-            mutation = refine_router.normal_text
             mutation_raw = "".join(refine_tokens)
+            mutation = refine_router.normal_text or mutation_raw.strip() or "(no visible Lucifer revision captured)"
             mutation_thought = refine_stream.thought_text
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            await refine_router.flush()
+            partial_thought = refine_router.thought_text
+            partial_revision = refine_router.normal_text or "".join(refine_tokens).strip()
+            if partial_thought:
+                await self.speaker.run(self._format_output_box(
+                    "LUCIFER REFINE THINKING | INCOMPLETE",
+                    partial_thought,
+                ))
+            if partial_revision:
+                await self.speaker.run(self._format_output_box(
+                    "LUCIFER REVISED DRAFT | INCOMPLETE, GATE NOT RUN",
+                    partial_revision,
+                ))
             await self.duel_log.record(
                 turn=turn, round=round_idx, kind="refine_failure",
                 actor="runtime", text=f"refine network failure: {e!r}",
@@ -585,14 +740,24 @@ class SI1Runtime:
                 "duel_phase_failed", e, phase="refine", round=round_idx,
             )
             return None, None, f"refine-phase network failure: {e!r}", False
-        # Close the refine line.
-        await self.speaker.run("")
+        finally:
+            # Always restore the chaos sampling, even on network failure.
+            self.lucifer.sampling = original_lucifer_sampling
         has_token = mutation.lstrip().startswith(config.ALIGNED_TOKEN)
+        refine_thought = mutation_thought or refine_router.thought_text
+        await self.speaker.run(self._format_output_box(
+            "LUCIFER REFINE THINKING",
+            refine_thought or "(no separate reasoning channel emitted)",
+        ))
+        await self.speaker.run(self._format_output_box(
+            "LUCIFER REVISED DRAFT | GATE PENDING",
+            mutation,
+        ))
         await self.duel_log.record(
             turn=turn, round=round_idx, kind="mutation", actor="lucifer",
             text=mutation,
             raw_text=mutation_raw,
-            thought_text=mutation_thought or refine_router.thought_text,
+            thought_text=refine_thought,
             has_aligned_token=has_token,
             model=config.LUCIFER_MODEL_NAME,
         )
@@ -604,24 +769,28 @@ class SI1Runtime:
         await self.speaker.run("=" * 60)
 
         # --------------- Phase 4 (Final Peripheral Gate: Obi verdict)
-        # Streamed. The gate is a short verdict line so the stream
-        # is short, but it's streamed for consistency with the rest
-        # of the four-phase loop.
+        # Capture the raw gate response for the Architect's audit view.
         # Swap Obi's sampling to the deterministic gate profile just for
         # this single call, then restore the critique profile.
+        await self.speaker.run("[Phase 4/4 — Gate: Obi evaluating the revised draft]")
         original_sampling = self.obi.generate.sampling
         self.obi.generate.sampling = dict(config.OBI_SAMPLING_GATE)
+        gate_tokens: list[str] = []
         try:
             try:
-                async def _print_gate_token(token: str) -> None:
-                    await self.speaker.write(token)
+                async def _collect_gate_token(token: str) -> None:
+                    gate_tokens.append(token)
 
                 verdict, payload = await self.obi.gate_stream(
                     revised_text=mutation,
                     last_critique=critique_text,
-                    on_token=_print_gate_token,
+                    on_token=_collect_gate_token,
                 )
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                await self.speaker.run(self._format_output_box(
+                    "OBI FINAL GATE RAW RESPONSE | INCOMPLETE",
+                    "".join(gate_tokens) or repr(e),
+                ))
                 await self.duel_log.record(
                     turn=turn, round=round_idx, kind="gate_failure",
                     actor="runtime", text=f"gate network failure: {e!r}",
@@ -632,9 +801,10 @@ class SI1Runtime:
                 return None, None, f"gate-phase network failure: {e!r}", False
         finally:
             self.obi.generate.sampling = original_sampling
-        # Close the gate stream on its own line.
-        await self.speaker.run("")
-
+        await self.speaker.run(self._format_output_box(
+            "OBI FINAL GATE RAW RESPONSE",
+            "".join(gate_tokens) or "(empty response)",
+        ))
         # Runtime-side per-hook substantively-addressed check.
         # Obi's verdict is one signal; the runtime verifies the four
         # bits are actually honored in the body of the revised draft
@@ -666,17 +836,15 @@ class SI1Runtime:
             payload_honored=ok,
         )
 
-        # Architect-facing audit verdict. The discipline critique and
-        # the revise mutation are internal-only (they live in
-        # ``duellog.json`` for the auditor), but the gate verdict is
-        # the audit *outcome* and the Architect needs to see it. On
-        # ACCEPT we print a one-line confirmation; on REJECT we print
-        # Obi's reason so the Architect knows the loop has ended.
+        # Show the model verdict separately from the deterministic check.
         if verdict.accepted and ok:
             await self.speaker.run(f"[obi gate: ACCEPTED]")
         else:
-            reason = verdict.reason or "no reason provided"
-            await self.speaker.run(f"[obi gate: REJECT — {reason}]")
+            await self.speaker.run("[obi gate: REJECT]")
+        await self.speaker.run(self._format_output_box(
+            "RUNTIME PER-HOOK EVIDENCE",
+            "\n".join(hook_evidence),
+        ))
 
         # Record any [META] block as a separate duellog row so the
         # Architect can later reconstruct epistemic counts without
@@ -686,6 +854,21 @@ class SI1Runtime:
             await self.duel_log.record(
                 turn=turn, round=round_idx, kind="meta", actor="lucifer",
                 text="", **meta.to_dict(),
+            )
+
+        # Surface the server-reported finish reason so the duellog can
+        # distinguish "model stopped on [META] / EOS" from "hit the
+        # max_tokens cap". Without this signal the previous cut-off
+        # bug ("mutation ends mid-sentence") was invisible to the
+        # auditor. Refine-phase finish_reason="length" with a body
+        # shorter than the body budget means we are still under-budget
+        # and need to investigate further, not just bump max_tokens.
+        refine_finish_reason = refine_stream.finish_reason
+        if refine_finish_reason and refine_finish_reason != "stop":
+            await self.duel_log.record(
+                turn=turn, round=round_idx, kind="refine_finish_reason",
+                actor="runtime", text=refine_finish_reason,
+                mutation_len=len(mutation),
             )
 
         # ACCEPT requires both Obi's verdict AND payload honesty.
@@ -765,10 +948,14 @@ class SI1Runtime:
     ) -> tuple[bool, list[str]]:
         """Runtime-side substantively-addressed check.
 
-        For each hook marked ``accepted``, at least one content word from
+        For each hook marked ``accepted``, at least TWO content words from
         the hook's body in the critique must appear in the revised draft's
-        body. For each hook marked ``disagreed``, the body must contain a
-        sentence beginning ``I disagree with hook N because …``.
+        body (to reduce false positives from single word matches).
+        For each hook marked ``disagreed``, the body must contain a
+        sentence beginning ``I disagree with hook N because …`` followed by
+        a substantive reason (at least 3 words after "because").
+        Hooks with no extractable content words require manual verification
+        and are treated as unverified (not automatically honored).
 
         Returns (overall_ok, per_hook_evidence_strings).
         """
@@ -781,24 +968,39 @@ class SI1Runtime:
             if bit == "disagreed":
                 marker = f"i disagree with hook {i} because"
                 if marker in body_lower:
-                    evidence.append(f"hook{i}=disagreed+justified")
+                    # Extract the reason part after "because"
+                    reason_start = body_lower.find(marker) + len(marker)
+                    reason = body_lower[reason_start:].strip()
+                    # Require at least 3 words in the reason to consider it substantive
+                    if len(reason.split()) >= 3:
+                        evidence.append(f"hook{i}=disagreed+justified")
+                    else:
+                        ok = False
+                        evidence.append(f"hook{i}=disagreed but reason too short: '{reason}'")
                 else:
                     ok = False
                     evidence.append(f"hook{i}=disagreed but no disagree-justification")
             else:  # accepted
                 if not nouns:
-                    # No content words to verify against; treat as honored
-                    # because we can't constructively disprove engagement.
-                    evidence.append(f"hook{i}=accepted (no content-words to verify)")
+                    # No content words to verify against; treat as unverified
+                    # (not automatically honored) since we can't verify engagement
+                    evidence.append(f"hook{i}=accepted (no content-words to verify - unverified)")
+                    ok = False  # Treat unverified as not passing the engagement check
                     continue
-                hit = any(n in body_lower for n in nouns)
-                if hit:
-                    evidence.append(f"hook{i}=accepted+backed")
+                # Require at least TWO content words to match (reduces false positives)
+                matches = [n for n in nouns if n in body_lower]
+                if len(matches) >= 2:
+                    evidence.append(f"hook{i}=accepted+backed ({len(matches)} word matches)")
                 else:
                     ok = False
-                    evidence.append(
-                        f"hook{i}=accepted but none of {nouns[:5]} appear in body"
-                    )
+                    if len(matches) == 1:
+                        evidence.append(
+                            f"hook{i}=accepted but only one word match: '{matches[0]}' (need >=2)"
+                        )
+                    else:
+                        evidence.append(
+                            f"hook{i}=accepted but no word matches from {nouns[:5]}"
+                        )
         return ok, evidence
 
 
@@ -815,13 +1017,18 @@ async def build_runtime() -> SI1Runtime:
     memory = MemoryStore()
     logger = Logger()
     duel_log = DuelLog()
+    sql_logger = SQLLogger()
+    sql_duel_log = SQLDuelLog()
     prompt_engine = PromptEngine()
 
     # Lucifer (main runtime) on port 666.
+    # Default sampling is the chaos profile; the runtime swaps in
+    # LUCIFER_SAMPLING_REFINE for Phase 3 (Refined Learning) and back.
+    # Memorize and ArchiveManager use the chaos profile by default.
     lucifer = Generate(
         http_url=config.LUCIFER_URL,
         model=config.LUCIFER_MODEL_NAME,
-        sampling=config.LUCIFER_SAMPLING,
+        sampling=config.LUCIFER_SAMPLING_CHAOS,
         chat_template_kwargs=config.LUCIFER_CHAT_TEMPLATE_KWARGS,
     )
 
@@ -872,6 +1079,26 @@ async def build_runtime() -> SI1Runtime:
         "facts": _file_status(config.FACTS_FILE),
         "archive": _file_status(config.ARCHIVE_FILE),
     }
+    memory_paths = {
+        "runtime": config.RUNTIME_FILE,
+        "facts": config.FACTS_FILE,
+        "archive": config.ARCHIVE_FILE,
+    }
+    log_paths = {
+        "runlog": config.RUN_LOG_FILE,
+        "duellog": config.DUEL_LOG_FILE,
+    }
+
+    try:
+        recent_run_events = await sql_logger.query_recent_events(limit=5)
+        recent_duel_events = await sql_duel_log.query_recent_turns(limit=5)
+        sql_ok = True
+        sql_note = (
+            f"OK (run_events={len(recent_run_events)}, duel_events={len(recent_duel_events)})"
+        )
+    except Exception as exc:  # pragma: no cover - startup health check best-effort
+        sql_ok = False
+        sql_note = f"ERROR: {exc}"
 
     # Boot banner
     print("=" * 72)
@@ -882,14 +1109,19 @@ async def build_runtime() -> SI1Runtime:
           f"(facts={len(facts)}, archive={len(archive)}, turn={runtime.turn})")
     if memory_error:
         print(f"    error: {memory_error}")
+    print(f"  SQL history: {sql_note}")
     print("  Memory files:")
     for name, status in memory_files.items():
-        print(f"    - {name}.json: {status}")
+        print(f"    - {memory_paths[name]}: {status}")
     print("  Log files:")
     for name, status in log_status.items():
-        print(f"    - {name}: {status}")
+        print(f"    - {log_paths[name]}: {status}")
     print(f"  Lucifer: {config.LUCIFER_MODEL_NAME} @ {config.LUCIFER_URL}")
     print(f"  Obi:     {config.OBI_MODEL_NAME} @ {config.OBI_URL}")
+    if sql_ok:
+        print("  Framework status: OK")
+    else:
+        print("  Framework status: DEGRADED")
     print("=" * 72)
 
     return SI1Runtime(
@@ -907,6 +1139,8 @@ async def build_runtime() -> SI1Runtime:
         runtime=runtime,
         facts=facts,
         archive=archive,
+        sql_logger=sql_logger,
+        sql_duel_log=sql_duel_log,
     )
 
 

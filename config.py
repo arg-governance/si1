@@ -10,10 +10,9 @@ APP_NAME = "SI-1 CONSTITUTIONAL COGNITIVE ARCHITECTURE"
 RUNTIME_VERSION = "v6.0-duel-4B-community"
 
 # Model identity (informational; actual serving is via two llama-server instances).
-# The "Lucifer" main runtime uses a Gemma-4-class model with MTP and mmproj.
-# The "Obi" observer uses a smaller Q8 instruction-tuned model.
-LUCIFER_MODEL_NAME = "gemma4-12B-it-qat"
-OBI_MODEL_NAME = "HERETICODER-2.5-3B-IT"
+# These names match the exact Unsloth GGUF names used in local serving.
+LUCIFER_MODEL_NAME = "gemma-4-E4B-it-qat-UD-Q4_K_XL"
+OBI_MODEL_NAME = "HERETICODER-2.5-3B-IT.i1-Q6_K"
 
 # LLM backend selection: 'llama_cpp' (in-process) or 'legacy_http' (external llama-server).
 # We use 'legacy_http' for both Lucifer and Obi so each can be its own llama-server process
@@ -30,7 +29,9 @@ OBI_HOST = os.environ.get("SI1_OBI_HOST", "127.0.0.1")
 OBI_PORT = int(os.environ.get("SI1_OBI_PORT", "999"))
 OBI_URL = f"http://{OBI_HOST}:{OBI_PORT}"
 
-# System tool definitions for Lucifer (Gemma-4)
+# System tool definitions for both Lucifer and Obi. These are loaded by default
+# for every chat-completion so the model sees that it can use local tooling
+# whenever a command is needed.
 M_BASH_TOOL_SCHEMA = {
     "type": "function",
     "function": {
@@ -49,20 +50,49 @@ M_BASH_TOOL_SCHEMA = {
     }
 }
 
-# Default sampling parameters per role. These are sent with every /v1/chat/completions
-# request. Override per-request by passing `sampling=` to Generate.__init__.
-#
-# Chaos-phase temperature (0.4) is intentionally moderate: high enough to
-# produce varied drafts from Gemma-4-E4B-UD-Q4, low enough to keep the
+LUCIFER_TOOLS = [M_BASH_TOOL_SCHEMA]
+# Tools should be available but optional. ``required`` forces a tool call on
+# every completion and can make models repeat commands when a plain answer is
+# already possible.
+LUCIFER_TOOL_CHOICE = "auto"
+OBI_TOOLS = [M_BASH_TOOL_SCHEMA]
+OBI_TOOL_CHOICE = "auto"
+
+# Chaos-phase sampling (Lucifer, Phase 1).
+# Temperature 0.4 is intentionally moderate: high enough to produce
+# varied drafts from Gemma-4-E4B-UD-Q4, low enough to keep the
 # unfiltered draft coherent enough that Obi's 4-hook critique has something
 # concrete to evaluate. Higher temperatures (>= 0.8) collapse to noise on
-# this model family.
-LUCIFER_SAMPLING = {
+# this model family. 2048 tokens gives the unfiltered draft the same
+# headroom as the refine phase, preventing mid-sentence cutoffs on
+# long, unconstrained prompts.
+LUCIFER_SAMPLING_CHAOS = {
     "temperature": 0.4,
     "top-k": 64,
     "top-p": 0.95,
-    "max_tokens": 1024,  # Changed from num_predict
+    "max_tokens": 2048,
 }
+
+# Refine-phase sampling (Lucifer, Phase 3).
+# The revise envelope — ``[ALIGNED]: accepted|accepted|accepted|accepted``
+# + body addressing four hooks + ``[META]`` block — costs ~1 000 tokens
+# of generated output on Gemma-4-E4B before the body finishes. Doubling
+# the chaos budget to 2048 lets the body fit without mid-sentence cutoffs
+# (the observed failure mode was drafts ending on "...social inequality. We"
+# or "...It served as"). Temperature drops to 0.2 to tighten the revision
+# per the README's "cognitive tightening" note for Phase 3.
+LUCIFER_SAMPLING_REFINE = {
+    "temperature": 0.3,
+    "top-k": 64,
+    "top-p": 0.95,
+    "max_tokens": 2048,
+}
+
+# Default Lucifer sampling profile. Used by components that reason about
+# Lucifer's output (Memorize, ArchiveManager) where phase identity doesn't
+# apply. Equals the chaos profile so callers that don't override get the
+# same behaviour as before.
+LUCIFER_SAMPLING = dict(LUCIFER_SAMPLING_CHAOS)
 
 # Per-request chat-template kwargs forwarded to llama-server. The Gemma-4
 # template gates the leading ``<|think|>`` token on ``enable_thinking``,
@@ -71,17 +101,17 @@ LUCIFER_SAMPLING = {
 # llama-server builds reject unknown keys).
 LUCIFER_CHAT_TEMPLATE_KWARGS = {"enable_thinking": True}
 
-# Obi uses a different temperature profile for the two phases:
-#   - Discipline Phase (critique): higher temperature so successive critiques vary
-#   - Final Gate:                  temperature 0.0 for deterministic verdicts
+# Obi uses a softer temperature profile for the two phases:
+#   - Discipline Phase (critique): 0.3 to allow more human phrasing and nuance
+#   - Final Gate:                  0.3 to keep the verdict readable without losing structure
 # The runtime selects the right one based on the call site.
 OBI_SAMPLING_CRITIQUE = {
-    "temperature": 0.4,
+    "temperature": 0.3,
     "top_p": 0.9,
     "max_tokens": 512,  # Changed from num_predict
 }
 OBI_SAMPLING_GATE = {
-    "temperature": 0.0,
+    "temperature": 0.2,
     "top_p": 1.0,
     "max_tokens": 32,   # Changed from num_predict
 }

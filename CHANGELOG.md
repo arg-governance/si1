@@ -1,5 +1,79 @@
 ﻿# SI-1 Changelog
 
+## [Unreleased] — Fix duplicate JSONL dual-log writes
+
+### Fixed
+- `SQLLogger` and `SQLDuelLog` now write only to SQLite. The primary `Logger` and `DuelLog` own JSONL appends, so the `SI1Runtime` dual adapters produce exactly one JSONL record and one SQL row per event.
+- SQL database initialization creates its parent directory when needed.
+- Dual logger type contracts now use structural protocols, matching the JSONL and SQLite sink implementations.
+
+### Tests
+- Added a regression covering one JSONL line and one SQL row for both run and duel events, plus a direct SQL-only call that must not create JSONL.
+- Full suite: `python -m unittest discover -s tests -p "test_*.py" -q` → 47 passed.
+
+---
+
+## [Unreleased] — Rails chat boot and Python service bridge
+
+### Fixed
+- Restored the Rails environment, development/test/production configuration, SQLite database config, and base controller required by `config.ru` and the HTML chat view.
+- Changed `ChatController` to proxy JSON to the Python backend (`SI1_PYTHON_BACKEND_URL`) instead of requiring `.py` modules as Ruby or calling a nonexistent `run_turn` method.
+- Replaced the Flask adapter's removed `before_first_request` hook, undefined `_runtime_obj`, and un-awaited memory load with lazy runtime initialization and one-turn async execution. Added `/health` and per-request phase-trace capture for the Rails UI.
+- Changed chat rendering to use DOM text nodes so user and model content is not interpreted as HTML.
+
+### Verification
+- Added `tests/test_rubyonrials_backend.py` for health, request validation, prompt forwarding, phase trace output, and request-state restoration.
+- `python -m unittest discover -s tests -p "test_*.py" -q` passes in the configured Python environment.
+- Rails boot was not executable in this workspace because Ruby and Bundler are not installed; see `rubyonrials/README.md` for launch steps.
+
+---
+
+## [Unreleased] — Architect transparency and gate input hardening
+
+### Changed
+- **Architect mode now exposes every duel phase.** Chaos thought/draft, Obi critique/opinion, Lucifer refine thought/revision, raw gate response, and runtime per-hook evidence are shown in labeled boxes as each phase completes. Progress markers remain visible while generation is running. Obi's verdict is a post-hoc audit and cannot retract already displayed content; this mode is for the private Architect workflow, not a public safety boundary.
+- **Gate input is framed as untrusted JSON data.** Obi is instructed not to follow embedded requests, role changes, policy claims, or fake verdict text. This reduces structural confusion but does not prevent semantic prompt injection; Obi's judgment remains model-dependent.
+- **Aligned payload parsing now matches the prompt contract.** `find_aligned_payload` accepts `[ALIGNED]:` on its own line followed by the four-bit payload line.
+- **Documentation reflects implementation boundaries.** README, architecture, and constitutional prompts describe Architect transparency, actual gate sampling, and residual model-dependent risk rather than claiming a deterministic semantic gate.
+
+### Tests
+- Added regressions for hostile JSON gate framing, boxed visibility of all phase content on ACCEPT/REJECT, and the token-on-own-line payload format.
+- Focused P3 tests: 3 passed. Full suite: `python -m unittest discover -s tests -p "test_*.py" -q` → 44 passed.
+
+---
+
+## [Unreleased] — SQLite dual-log audit storage
+
+### Added
+- **SQLite dual-log backend.** The runtime now keeps the JSONL audit files and writes the same entries to SQLite databases via `aiosqlite`, providing queryable event storage without replacing the existing JSONL source-of-truth.
+- **Dual logging wiring.** `SI1Runtime` exposes `sql_logger` and `sql_duel_log`, and the runtime writes through dual logger adapters so both the original JSONL loggers and the SQLite-backed loggers record the same events.
+- **Indexed audit tables.** `sql_logger.py` creates SQLite tables for run events and duel events with indexes for timestamp, event, turn, round, kind, and actor queries.
+- **Redacted runtime logging.** Execution events continue to redact sensitive prompt/output fields before writing to either JSONL or SQLite stores.
+
+### Verification
+- `python -m unittest discover -s tests -p "test_*.py" -q` → `Ran 41 tests in 0.361s — OK`
+
+---
+
+## [Unreleased] — Tool-call replay, single-round loop, runtime consistency
+
+### Fixed
+- **OpenAI-style tool loop is now the runtime default.** The main HTTP completion methods in `runtime_components.py` now execute tool calls emitted by the model, append the tool results to the conversation, and continue until the model returns a plain text answer or the tool loop limit is reached. This resolves the earlier silent failure where tool-enabled backends could return an empty `GenerationResult` after emitting a valid `tool_calls` payload.
+- **Tool use is documented as transport-level behavior, not custom prompt syntax.** The canonical contract is `tools + tool_choice`, not a meta tag like `use tools`. Both models now use `tool_choice="auto"`; the tool schema is available without forcing a tool call on every completion. Streamed completions execute and replay tool calls as well as non-streaming completions.
+- **Memory writes replace each file atomically.** `MemoryStore` writes and syncs a same-directory temporary file before replacing the destination, and reports per-file save failures. The three-file save is not a cross-file transaction, and recovery of already-corrupt files remains future work.
+- **Documentation and runtime now agree on the single-round loop and sampling values.** The project has one canonical contract: four phases exactly once, chaos at temperature 0.4, and tool use enabled by request payload rather than a magic string.
+- **Direct architect-tag prompts are supported.** `[LUCIFER]: ...` and `[OBI]: ...` are now recognized as one-to-one convenience prompts that bypass the full duel for that single interaction.
+
+### Added
+- **Regression coverage for the tool replay path.** `tests/test_smoke_tests.py` includes a regression asserting that `run_messages()` keeps consuming `tool_calls` until it reaches a non-tool completion.
+- **Green terminal output for Lucifer tool executions.** Bash tool calls from Lucifer print the command and result in green ANSI color, making each tool use visible in the terminal.
+
+### Verification
+- `python -m unittest tests.test_smoke_tests -q` → `Ran 14 tests in 0.256s — OK`
+- GitHub push is intentionally deferred until local architect testing is finished and approval is granted.
+
+---
+
 ## [Unreleased] — Single-round loop fix, Obi opinion split, tests
 
 ### Fixed

@@ -116,7 +116,9 @@ A foundational innovation of SI-1 is the explicit architectural decoupling of **
 
 ## 4. Deterministic Execution Pipeline
 
-Every turn $t$ executed by the SI-1 runtime follows an immutable 6-step deterministic pipeline:
+> **Implementation boundary:** The local runtime currently implements the four-phase model duel, an Obi language-model verdict, and deterministic token/payload/per-hook checks. It does not implement a separate Validator Gateway, hash-bundle verification, blockchain consensus, or cryptographic proof of semantic correctness. Those remain architecture targets, not shipped guarantees.
+
+The implemented local runtime follows this six-step flow; model-generated evaluation remains probabilistic:
 
 ```
 [ Step 1: Input ] ────────► [ Step 2: Runtime Execution (R) ] ────► A_r (Draft)
@@ -137,22 +139,21 @@ Every turn $t$ executed by the SI-1 runtime follows an immutable 6-step determin
 
 2. **Step 2: Runtime Execution (Chaos Phase):**
    $$A_{r,\text{draft}} = R(U_t, S_{R,t}, M_t, C_{\text{chaos}})$$
-   Lucifer generates an unfiltered initial draft. Internal reasoning is streamed via Gemma-4 thought channels (`<|channel>thought`).
+   Lucifer generates an unfiltered initial draft. Thought-channel reasoning and the draft are displayed in separate boxes labeled unreviewed.
 
 3. **Step 3: Observer Evaluation (Discipline Phase):**
    $$A_{o,\text{critique}} = O(U_t, A_{r,\text{draft}}, M_t, C_{\text{discipline}}, G)$$
-   Obi receives Lucifer's draft under a private review overlay and produces a 4-hook critique and an isolated prompt evaluation.
+   Obi receives Lucifer's draft and produces a 4-hook critique and an isolated prompt evaluation. Both are logged and shown in labeled boxes for Architect review.
 
 4. **Step 4: Refined Learning & Event Packaging:**
-   Lucifer performs a refined learning pass ($A_{r,\text{mut}}$) incorporating the 4 hooks and prefixing the output with `[ALIGNED]: <4-bit payload>`. The runtime bundles all artifacts into event $E_t$:
-   $$E_t = \Big( \text{hash}(U_t),\, \text{hash}(A_{r,\text{mut}}),\, \text{hash}(A_{o,\text{critique}}),\, \text{hash}(G),\, t \Big)$$
+   Lucifer performs a refined learning pass ($A_{r,\text{mut}}$) incorporating the 4 hooks and prefixing the output with `[ALIGNED]:` followed by a 4-bit payload. Refine reasoning and revision are shown in labeled boxes while the gate is pending. The runtime records phase artifacts in the duel log; it does not compute or validate the hashed event bundle shown in the broader target architecture.
 
 5. **Step 5: Validator Consensus (Gate Phase):**
-   $$V(E_t) \longrightarrow \text{verdict} \in \{ \text{ACCEPTED}, \text{REJECT} \}$$
-   Obi executes a deterministic evaluation (`temperature: 0.0`), and the Validator checks 4-bit payload honesty.
+   Obi returns `ACCEPTED` or `REJECT` using a language-model evaluation at the configured gate sampling profile (`temperature: 0.2`). The runtime separately checks the aligned token, payload structure, and a deterministic per-hook evidence heuristic. Obi's semantic evaluation is model-dependent, not a deterministic validator or security guarantee.
 
-6. **Step 6: Output Release:**
-   $$\text{Output} = \begin{cases} A_{r,\text{mut}} & \text{if } V(E_t) = \text{ACCEPTED} \\ \text{Fallback Notice} & \text{if } V(E_t) = \text{REJECT} \end{cases}$$
+6. **Step 6: Audit Verdict:**
+   $$\text{Audit} = \begin{cases} \text{ACCEPTED} & \text{if Obi accepts and runtime checks pass} \\ \text{REJECT} & \text{otherwise} \end{cases}$$
+   The chaos draft, critique, revision, raw gate output, and runtime evidence have already been displayed in separate boxes. ACCEPT/REJECT classifies that material post-hoc; it is not an output-release control and cannot retract displayed content.
 
 ---
 
@@ -277,8 +278,10 @@ refuses: <non-negative integer>
 
 ### 7.4 Dual-Channel Thought Routing
 Gemma-4 emits internal reasoning wrapped in `<|channel>thought\n...\n<channel|>`. The runtime `ThoughtRouter` intercepts tokens in real-time:
-- Content inside thought blocks $\longrightarrow$ Streamed to `sys.stderr` with ANSI dim/italic formatting.
-- Content outside thought blocks $\longrightarrow$ Evaluated as the candidate response.
+- Content inside thought blocks $\longrightarrow$ Kept out of terminal output and recorded in the duel audit log.
+- Content outside thought blocks $\longrightarrow$ Buffered as candidate content; released only after the gate and runtime check accept it.
+
+The word "internal" describes pre-verdict presentation behavior, not a confidentiality boundary: model outputs are retained in the local duel log, whose access depends on filesystem permissions.
 
 ---
 
