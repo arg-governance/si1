@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
+import re
 from typing import Any
 
 
@@ -252,7 +253,13 @@ class DuelVerdict:
 
     @classmethod
     def from_gate_text(cls, text: str) -> "DuelVerdict":
-        """Parse Obi's gate output. Tolerant of whitespace and casing."""
+        """Parse Obi's gate output. Tolerant of whitespace and casing.
+
+        A REJECT is only valid when Obi supplies a specific, non-generic reason
+        line. Generic fallbacks like ``no reason provided`` are treated as a
+        failed parse so the runtime can force a hard reject with an explicit
+        reason from Obi's own verdict logic.
+        """
         if not text:
             return cls(accepted=False, reason="empty gate response")
 
@@ -265,7 +272,6 @@ class DuelVerdict:
             return cls(accepted=True, reason="")
 
         if first == "REJECT":
-            # Look for a 'reason: ...' line somewhere after.
             reason = ""
             for ln in lines[1:]:
                 if ln.lower().startswith("reason"):
@@ -274,7 +280,24 @@ class DuelVerdict:
                         _, _, after = ln.partition("-")
                     reason = after.strip()
                     break
-            return cls(accepted=False, reason=reason or "no reason provided")
+            if not reason:
+                return cls(accepted=False, reason="reject without specific obi reason")
+            reason_lower = reason.lower()
+            generic_markers = {
+                "no reason provided",
+                "generic reject",
+                "reject without specific reason",
+                "no reason",
+                "reason missing",
+                "empty gate response",
+            }
+            if reason_lower in generic_markers or reason_lower.startswith("reason:"):
+                return cls(accepted=False, reason="reject without specific obi reason")
+            if any(token in reason_lower for token in ("hook", "missing", "evidence", "defect", "gap", "contradiction", "unsupported", "fails", "lacks", "invalid", "wrong", "ignored")):
+                return cls(accepted=False, reason=reason)
+            if len([word for word in reason.split() if len(word) > 3]) >= 3:
+                return cls(accepted=False, reason=reason)
+            return cls(accepted=False, reason=reason)
 
         return cls(accepted=False, reason=f"unparseable gate verdict: {lines[0]!r}")
 
@@ -334,15 +357,17 @@ def find_aligned_payload(text: str) -> tuple[bool, "GatePayload | None", str]:
     stripped = text.lstrip()
     if not stripped.startswith("[ALIGNED]:"):
         return False, None, text
-    # Drop the token line.
+    # Drop the token line and locate the next non-empty payload line.
     after_token = stripped[len("[ALIGNED]:"):]
-    # Look for a 4-bit payload on the next non-empty line.
-    lines = after_token.split("\n", 1)
-    first = lines[0].strip()
-    rest = lines[1] if len(lines) > 1 else ""
+    lines = after_token.splitlines()
+    payload_index = next(
+        (index for index, line in enumerate(lines) if line.strip()),
+        None,
+    )
+    first = lines[payload_index].strip() if payload_index is not None else ""
     payload = GatePayload.from_payload_line(first)
     if payload.is_valid() and "|" in first:
-        body = rest.lstrip("\n")
+        body = "\n".join(lines[payload_index + 1:]).lstrip("\n")
     else:
         payload = None
         body = after_token.lstrip("\n")
@@ -362,6 +387,34 @@ def find_override(text: str) -> str | None:
         lower = stripped.lower()
         if lower.startswith("[override]:"):
             return stripped[len("[override]:"):].strip()
+    return None
+
+
+def parse_architect_tag(text: str) -> tuple[str, str] | None:
+    """Parse direct one-to-one prompts like ``[LUCIFER]: ...`` or ``[OBI]: ...``.
+
+    Returns ``("lucifer", prompt_body)`` or ``("obi", prompt_body)`` when a
+    direct tagged prompt is present; otherwise ``None``. A direct tagged prompt
+    bypasses the four-phase duel loop and sends the Architect's body directly to
+    the named model as a casual one-on-one prompt.
+    """
+    if not text:
+        return None
+    # Cursor keys can arrive as ANSI CSI sequences when the tag is edited in
+    # a terminal. For example, ``[LUCIFER]`` followed by cursor-right may
+    # reach stdin as ``[LUCIFER]\x1b[C:`` and otherwise miss this branch.
+    normalized = re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", text)
+    normalized = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", normalized)
+    stripped = normalized.strip()
+    for name in ("lucifer", "obi"):
+        prefix = f"[{name.upper()}]:"
+        if stripped.upper().startswith(prefix):
+            body = stripped[len(prefix):].strip()
+            return (name, body) if body else None
+        short_prefix = f"[{name.upper()}]"
+        if stripped.upper().startswith(short_prefix):
+            body = stripped[len(short_prefix):].lstrip(":").strip()
+            return (name, body) if body else None
     return None
 
 

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import tempfile
 from pathlib import Path
 from typing import Any, Optional
 
@@ -45,6 +47,20 @@ class MemoryStore:
         runtime_raw, facts_raw, archive_raw = (
             r if not isinstance(r, BaseException) else None for r in results
         )
+
+        # Report which files had issues (for logging/visibility)
+        files_issues = []
+        if isinstance(results[0], BaseException):
+            files_issues.append(f"runtime file ({self.runtime_file}): {results[0]!r}")
+        if isinstance(results[1], BaseException):
+            files_issues.append(f"facts file ({self.facts_file}): {results[1]!r}")
+        if isinstance(results[2], BaseException):
+            files_issues.append(f"archive file ({self.archive_file}): {results[2]!r}")
+
+        if files_issues:
+            # In a real implementation, this would go to a proper logger
+            print(f"[MEMORY STORE WARNING] Issues loading memory files: {'; '.join(files_issues)}")
+
         return (
             RuntimeState.from_dict(runtime_raw),
             self._parse_facts(facts_raw),
@@ -58,26 +74,62 @@ class MemoryStore:
         facts: list[Fact],
         archive: list[ArchiveEntry],
     ) -> None:
-        # Same isolation rationale as ``load``: a failure writing the
-        # archive must not lose the runtime counter / facts update.
-        # Exceptions are logged and swallowed at the call site instead.
-        await asyncio.gather(
-            self._save_json(self.runtime_file, runtime.to_dict()),
-            self._save_json(self.facts_file, [f.to_dict() for f in facts]),
-            self._save_json(self.archive_file, [a.to_dict() for a in archive]),
+        paths = (self.runtime_file, self.facts_file, self.archive_file)
+        payloads = (
+            runtime.to_dict(),
+            [fact.to_dict() for fact in facts],
+            [entry.to_dict() for entry in archive],
+        )
+        results = await asyncio.gather(
+            *(self._save_json(path, payload) for path, payload in zip(paths, payloads)),
             return_exceptions=True,
         )
+        failures = [
+            (path, result)
+            for path, result in zip(paths, results)
+            if isinstance(result, BaseException)
+        ]
+        if failures:
+            detail = "; ".join(f"{path}: {error!r}" for path, error in failures)
+            raise OSError(f"Failed to persist SI-1 memory file(s): {detail}")
 
     # --------------------------------------------------------------- helpers
     @staticmethod
     async def _load_json(path: Path) -> Any:
         if not path.exists():
             return None
-        async with aiofiles.open(path, "r", encoding="utf-8") as f:
-            text = await f.read()
-        if not text.strip():
+        try:
+            async with aiofiles.open(path, "r", encoding="utf-8") as f:
+                text = await f.read()
+            if not text.strip():
+                return None
+            return json.loads(text)
+        except json.JSONDecodeError as e:
+            # Corrupt JSON detected - back up the file and return None for degraded mode
+            import datetime
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_path = path.with_suffix(f".corrupt.{timestamp}{path.suffix}")
+            try:
+                import shutil
+                shutil.copy2(path, backup_path)
+                # Log the corruption (in a real implementation, this would go to a logger)
+                print(f"[MEMORY STORE WARNING] Corrupt JSON file {path} backed up to {backup_path}")
+            except Exception:
+                # If we can't even back up the file, we still return None to avoid crashing
+                pass
             return None
-        return json.loads(text)
+        except Exception as e:
+            # Other IO errors - return None for degraded mode
+            import datetime
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_path = path.with_suffix(f".error.{timestamp}{path.suffix}")
+            try:
+                import shutil
+                shutil.copy2(path, backup_path)
+                print(f"[MEMORY STORE WARNING] Error reading file {path} backed up to {backup_path}")
+            except Exception:
+                pass
+            return None
 
     @staticmethod
     async def _save_json(path: Path, data: Any, *, compact: bool = True) -> None:
@@ -86,8 +138,40 @@ class MemoryStore:
             payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
         else:
             payload = json.dumps(data, ensure_ascii=False, indent=2)
-        async with aiofiles.open(path, "w", encoding="utf-8") as f:
-            await f.write(payload)
+
+        def _atomic_write() -> None:
+            temp_path: str | None = None
+            try:
+                fd, temp_path = tempfile.mkstemp(
+                    prefix=f".{path.name}.",
+                    suffix=".tmp",
+                    dir=path.parent,
+                )
+                with os.fdopen(fd, "w", encoding="utf-8") as temp_file:
+                    temp_file.write(payload)
+                    temp_file.flush()
+                    os.fsync(temp_file.fileno())
+                os.replace(temp_path, path)
+                temp_path = None
+
+                # Persist the directory entry update where the platform
+                # supports directory fsync (Linux deployments).
+                try:
+                    directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+                except (AttributeError, OSError):
+                    return
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
+            finally:
+                if temp_path is not None:
+                    try:
+                        os.unlink(temp_path)
+                    except FileNotFoundError:
+                        pass
+
+        await asyncio.to_thread(_atomic_write)
 
     @staticmethod
     def _parse_facts(raw: Any) -> list[Fact]:

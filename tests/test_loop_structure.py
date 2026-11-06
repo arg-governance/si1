@@ -238,7 +238,7 @@ class TestObiSeesLucifersDraft(unittest.TestCase):
         refine phase must contain exactly one ``astream_messages`` call
         (Lucifer's revise) and no ``critique_stream`` call."""
         # Locate the refine-phase region by finding the comment marker.
-        refine_marker = "[refine-phase streaming Lucifer's revision"
+        refine_marker = "[Phase 3/4 — Refine: Lucifer revising from Obi's critique]"
         idx = self.src.find(refine_marker)
         self.assertGreater(idx, 0, "Could not locate the refine-phase marker")
         # Take the region from the marker to the next phase marker
@@ -279,6 +279,7 @@ class TestObiSeesLucifersDraft(unittest.TestCase):
             "gate",                # gate-phase
             "meta",                # any revised-draft meta
             "rejection",           # runtime hard reject
+            "refine_finish_reason",  # refine-phase EOS / length signal
         }
         for match in re.finditer(
             r"self\.duel_log\.record\(\s*[^)]*?kind\s*=\s*['\"]([^'\"]+)['\"]",
@@ -473,8 +474,8 @@ class TestArchitectOpinionSplit(unittest.TestCase):
 
 class TestArchitectOpinionWiring(unittest.TestCase):
     """Verify the wiring in si1.py: the runtime splits Obi's critique,
-    surfaces the opinion block visibly to the Architect, and feeds only
-    the hooks portion back to Lucifer for the refine phase."""
+    keeps the opinion in the audit log, and feeds only the hooks portion
+    back to Lucifer for the refine phase."""
 
     def setUp(self) -> None:
         self.src = _read(ROOT / "si1.py")
@@ -488,14 +489,12 @@ class TestArchitectOpinionWiring(unittest.TestCase):
             "refine phase.",
         )
 
-    def test_opinion_surfaced_with_obi_header_label(self) -> None:
-        """The runtime must print a visible header label so the
-        Architect can see Obi's independent read on stdout."""
+    def test_opinion_is_boxed_for_architect_review(self) -> None:
+        """Obi's independent prompt opinion is shown in its own audit box."""
         self.assertIn(
-            "[obi's view on the architect's prompt]",
-            self.src.lower(),
-            "si1.py must print a labelled header so the Architect sees "
-            "Obi's independent take on stdout (not buried in duellog).",
+            '"OBI VIEW ON ARCHITECT PROMPT"',
+            self.src,
+            "Obi's opinion should be shown in a separate labeled box.",
         )
 
     def test_architect_opinion_kind_in_duellog(self) -> None:

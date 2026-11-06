@@ -49,7 +49,7 @@ class PromptEngine:
         ]
         active_facts = active_facts[-MAX_ACTIVE_FACTS_IN_PROMPT:][::-1]
 
-        fact_lines = ["### LOGICAL MEMORY FACTS (CONFIDENCE 1.0)"]
+        fact_lines = ["### LOGICAL MEMORY FACTS (CONFIDENCE 0.8)"]
         if active_facts:
             # We pull only the raw statement text string to keep the token usage tiny
             for fact in active_facts:

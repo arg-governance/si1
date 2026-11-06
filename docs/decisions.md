@@ -6,6 +6,60 @@
 
 ---
 
+## ADR-0005 — Standardize on OpenAI-style tool calling
+
+- **Date:** 2026-09-15
+- **Status:** Accepted
+
+### Context
+The project had drifted between three distinct ideas for tool use: a custom prompt marker, an implicit tool invocation contract, and the actual OpenAI-compatible transport pattern. The runtime and prompt files were not internally consistent, and the visible system prompt could imply that a special text tag was needed when the true mechanism is the OpenAI request body (`tools` + `tool_choice`).
+
+### Decision
+Standardize the implementation and the prompt contract around the OpenAI-compatible tool schema. Each request includes the `tools` array for the relevant model and a matching `tool_choice` value. The initial implementation used `"required"` for both Lucifer and Obi.
+
+### Consequences
+- Tool usage is now described in the runtime and prompt docs as a request-level behavior, not as a custom tag or hidden prompt hack.
+- `runtime_components.py` runs a bounded tool loop until a final plain-text answer is produced, which is the correct OpenAI-style execution semantics for function calling.
+- Any future agent or prompt design needs to be validated against the actual transport contract instead of inventing a new marker.
+
+---
+
+## ADR-0006 — Make tools optional and replay streamed tool calls
+
+- **Date:** 2026-09-30
+- **Status:** Accepted; supersedes the `tool_choice` setting and streaming-path behavior from ADR-0005.
+
+### Context
+Using `tool_choice="required"` encouraged tool calls even when a direct answer was sufficient. In addition, non-streaming completions executed and replayed calls, while streamed completions only observed tool-call metadata and could lose the follow-up answer.
+
+### Decision
+Keep the bash tool schema available to Lucifer and Obi, but use `tool_choice="auto"`. Reconstruct streamed OpenAI-style tool calls, execute them once, append their results to the conversation, and continue generation under a bounded cycle limit. If that limit is exhausted, return an explicit limit message rather than an empty completion.
+
+### Consequences
+- A model can answer without making an unnecessary shell call.
+- Streamed and non-streamed message completions both support tool execution and replay.
+- The tool loop remains bounded; tool execution itself still runs local shell commands and must be treated as privileged behavior.
+
+---
+
+## ADR-0007 — Atomically replace individual memory files
+
+- **Date:** 2026-09-30
+- **Status:** Accepted
+
+### Context
+Writing JSON directly to its destination could truncate a file if the process or machine stopped during the write. Earlier save code also swallowed individual file-write failures.
+
+### Decision
+Serialize each memory object to a same-directory temporary file, flush and sync it, then atomically replace that one destination. Aggregate per-file write errors and raise an error naming the failed paths.
+
+### Consequences
+- An interrupted individual write leaves the previous destination intact, subject to filesystem/platform guarantees.
+- The runtime, facts, and archive files are still separate replacements, not a single transaction.
+- Corrupt/unreadable files still need a separate recovery or quarantine policy; default-on-load is not recovery.
+
+---
+
 ## ADR-0003 — Reconcile Lucifer chaos temperature to 0.4
 
 - **Date:** 2026-08-24

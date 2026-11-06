@@ -18,6 +18,21 @@ Traditional artificial intelligence alignment strategies—such as post-hoc RLHF
 
 By structurally separating cognition into independent execution, observation, integrity validation, and human constitutional governance layers, SI-1 ensures that increasing model autonomy is accompanied by equally robust, mathematically verifiable mechanisms for accountability, auditability, and controlled constitutional evolution.
 
+### Final Runtime Contract: OpenAI-style tool calling, not custom tags
+The executable runtime does not rely on a special meta tag to trigger shell access. The actual contract is an OpenAI-compatible request body with a `tools` array and a matching `tool_choice` value. Both Lucifer and Obi use `tool_choice="auto"`: tools are available when needed, but a tool call is not forced for every completion. When the model emits `tool_calls`, both non-streaming and streaming paths execute the call, append the `tool` result, and continue generation within a bounded tool-cycle limit.
+
+This is the correct, transport-level behavior for local bash execution and is the project standard in both the runtime and prompt spec. There is no separate magic tag that says "use tools"; the tool schema and explicit tool choice are the mechanism.
+
+### Convenience feature: direct architect-tagged prompts
+The runtime accepts direct one-to-one prompts tagged by the Architect:
+
+- `[LUCIFER]: ...` — send a casual prompt directly to Lucifer.
+- `[OBI]: ...` — send a casual prompt directly to Obi.
+
+These bypass the four-phase duel loop for that single interaction and are meant for quick, direct checks without entering the full governance cycle.
+
+> GitHub push is intentionally deferred until the Architect completes local testing and explicitly approves the final release state.
+
 ---
 
 ## 🏛️ II. The Multi-Layer Governance Architecture
@@ -67,42 +82,43 @@ SI-1 formalizes AI governance into four structurally decoupled layers, establish
 
 ## ⚡ III. The Asymmetric Dual-Model Duel Loop
 
-The runtime executes an asynchronous, dual-backend loop between two isolated `llama-server` instances, enforcing cognitive friction before any state is committed to memory or released to the user:
+The runtime executes an asynchronous loop between two isolated `llama-server` instances, applying cognitive friction before state is committed while exposing each phase to the private Architect for review:
 
 ```
                     ┌────────────────────────────────────────┐
                     │         The Architect (User)           │
                     └────────────────────────────────────────┘
                                    │            ▲
-                    1. User Prompt │            │ 4. Verified Output
-                                   ▼            │    (or Hard Drop)
+                    1. User Prompt │            │ 4. Phase Output + Audit
+                                   ▼            │    (ACCEPTED / REJECT)
 ┌────────────────────────────────────────────────────────────────────────────────────┐
 │ SI-1 Execution Kernel (si1.py)                                                     │
 │                                                                                    │
 │   Phase 1: Chaos Dispatch (Lucifer Core)                                           │
 │   - Temp 0.4, Thinking Enabled (<|channel>thought)                                 │
-│   - Unfiltered initial draft generation + isolated private thought stream          │
+│   - Reasoning and draft are shown in separate unreviewed boxes                     │
 │                                  │                                                 │
 │                                  ▼ (unfiltered draft)                              │
 │   Phase 2: Discipline Intercept (Obi Core)                                         │
 │   - Stateless reset (--kvu): Zero historical token bleed                           │
 │   - Evaluates 4 Constitutional Hooks + independent prompt opinion                  │
+│   - Critique and opinion are shown in labeled boxes for Architect review            │
 │                                  │                                                 │
 │                                  ▼ (4 hooks only; opinion isolated)                │
 │   Phase 3: Refined Synthesis (Lucifer Core)                                        │
-│   - Cognitive tightening (Temp 0.2); addresses specific critique hooks             │
-│   - Injects compliance signature: [ALIGNED]: <4-bit payload>                       │
+│   - Revision and refine reasoning are shown in boxes while gate is pending          │
+│   - Emits [ALIGNED]: followed by the 4-bit payload on the next line                │
 │                                  │                                                 │
 │                                  ▼ (revised mutation)                              │
-│   Phase 4: Deterministic Final Gate (Obi Core)                                     │
-│   - Binary collapse (Temp 0.0, max_tokens 32)                                      │
-│   - Commit: ACCEPTED (to Mempool/User) vs. REJECT (Hard Fallback Drop)             │
+│   Phase 4: Model-Based Gate (Obi Core)                                             │
+│   - Verdict at Temp 0.2; runtime also checks token, payload, and hook evidence      │
+│   - Gate is a post-hoc audit; it cannot retract phase output already shown          │
 └────────────────────────────────────────────────────────────────────────────────────┘
           │                                                         │
           ▼ (HTTP :666)                                             ▼ (HTTP :999)
 ┌───────────────────────────────────┐                     ┌───────────────────────────────────┐
 │ Lucifer Server (Port 666)         │                     │ Obi Server (Port 999)             │
-│ Model: Gemma-4-E4B-it-UD-Q4_K_XL  │                     │ Model: Hereticoder-2.5-3b-it      │
+│ Model: gemma-4-E4B-it-qat-UD-Q4_K_XL │                     │ Model: HERETICODER-2.5-3B-IT.i1-Q6_K │
 │ Role: Intuitive Reasoning Core    │                     │ Role: Constitutional Observer     │
 └───────────────────────────────────┘                     └───────────────────────────────────┘
 ```
@@ -111,11 +127,21 @@ The runtime executes an asynchronous, dual-backend loop between two isolated `ll
 
 | Parameter | Lucifer (Primary Runtime) | Obi (Strategic Mentor / Gate) |
 | :--- | :--- | :--- |
-| **Model** | `Gemma-4-E4B-it-UD-Q4_K_XL` (Unsloth QAT) | `Hereticoder-2.5-3b-it` |
+| **Model** | `gemma-4-E4B-it-qat-UD-Q4_K_XL` (Unsloth QAT, **post-fine-tuned**) | `HERETICODER-2.5-3B-IT.i1-Q6_K` |
 | **Server Port** | `http://127.0.0.1:666` | `http://127.0.0.1:999` |
-| **Prompt Stack** | Shared SI-1 Constitution ([core/system.md](core/system.md)) | Shared Constitution + Private Review Overlay ([core/observer_system.md](core/observer_system.md)) |
-| **Sampling Schedule** | **Chaos:** `Temp 0.4`, `top-p 0.95` \| **Revision:** `Temp 0.2` | **Discipline:** `Temp 0.4` \| **Gate:** `Temp 0.0` (Deterministic) |
+| **Prompt Stack** | Lucifer constitution ([core/system.md](core/system.md)) | Independent observer prompt ([core/observer_system.md](core/observer_system.md)) |
+| **Sampling Schedule** | **Chaos:** `Temp 0.4`, `top-p 0.95` \| **Revision:** `Temp 0.3` | **Discipline:** `Temp 0.3` \| **Gate:** `Temp 0.2` |
 | **Context Policy** | Multi-turn within the turn (`[assistant(draft), user(critique)]`) | **Stateless Reset:** Flushes KV cache (`--kvu`) on every evaluation |
+| **Tool contract** | `tools=[execute_bash_command]`, `tool_choice="auto"` | Same schema and optional tool choice as Lucifer |
+
+deterministic payload-engagement check passes. This prevents ordinary generated
+Architect mode is fully transparent: chaos and refine reasoning, the chaos draft,
+Obi's critique/opinion, Lucifer's revision, the raw gate response, and deterministic
+per-hook evidence are shown in labeled boxes as the phases complete. The gate is a
+post-hoc audit, not a content-release boundary; a REJECT cannot retract material
+already displayed. JSON framing and instructions reduce structural prompt-injection
+risk, but Obi's semantic evaluation remains model-dependent and is not guaranteed
+to resist injection.
 
 ### The Four-Hook Discipline Contract
 1. `arrived`: Core claim and Lucifer's strongest premise.
@@ -280,12 +306,18 @@ All parameters in [config.py](config.py) can be overridden via environment varia
 
 ```python
 # Sampling profiles per role
-LUCIFER_SAMPLING = {"temperature": 1.0, "top-k": 64, "top-p": 0.95, "max_tokens": 1024}
+LUCIFER_SAMPLING = {"temperature": 0.4, "top-k": 64, "top-p": 0.95, "max_tokens": 2048}
 LUCIFER_CHAT_TEMPLATE_KWARGS = {"enable_thinking": True}
 
-OBI_SAMPLING_CRITIQUE = {"temperature": 0.4, "top_p": 0.9, "max_tokens": 512}
-OBI_SAMPLING_GATE = {"temperature": 0.0, "top_p": 1.0, "max_tokens": 32}
+OBI_SAMPLING_CRITIQUE = {"temperature": 0.3, "top_p": 0.9, "max_tokens": 512}
+OBI_SAMPLING_GATE = {"temperature": 0.3, "top_p": 1.0, "max_tokens": 32}
 ```
+
+The project standard is that both models receive the same tool schema and `tool_choice="auto"`. Any request that tries to use a special text marker instead of the tool contract is contrary to the runtime design and must be treated as a prompt-level confusion, not a supported feature. Tool cycles are bounded to prevent repeated calls from running indefinitely.
+
+### Memory persistence guarantees and limits
+
+`MemoryStore` writes each JSON file to a temporary file in the same directory, flushes it, and atomically replaces that individual destination. Failed writes are reported with the affected path. The three files (`runtime.json`, `facts.json`, `archive.json`) are saved concurrently, so the set is **not** one cross-file atomic transaction. A corrupt or unreadable file during load is currently treated as unavailable/default data; atomic writes do not recover earlier contents from an already-corrupt file. Preserve backups until a recovery/quarantine policy is implemented.
 
 ---
 
@@ -312,6 +344,44 @@ python -m unittest tests.test_smoke_tests -v
 python -m unittest discover -s tests -p "test_*.py" -v
 ```
 
+### 4. Transfer this Windows workspace to antiX 26
+
+To continue with the current worktree (including uncommitted changes, untracked
+files, and Git history), create a tarball from PowerShell. The archive includes
+`.git`, `memory/`, and `logs/`; those may contain private history, prompts, or
+model output, so store and transfer the archive securely.
+
+```powershell
+$archive = Join-Path $env:USERPROFILE "Desktop\SI1-workspace-antiX.tar.gz"
+tar.exe -czf $archive `
+  --exclude=".venv*" `
+  --exclude="**/__pycache__" `
+  --exclude="**/.pytest_cache" `
+  --exclude="rubyonrials/log" `
+  --exclude="rubyonrials/tmp" `
+  --exclude="rubyonrials/db/*.sqlite3" `
+  -C D:\finalSI1 .
+if ($LASTEXITCODE -ne 0) { throw "Workspace export failed" }
+Write-Output $archive
+```
+
+Copy the archive to antiX (for example, with `scp`) and extract it into a new
+directory. Do not copy Windows Python virtual environments or Ruby gems; they
+are platform-specific and will be recreated on antiX.
+
+```bash
+mkdir -p ~/projects/finalSI1
+tar -xzf ~/SI1-workspace-antiX.tar.gz -C ~/projects/finalSI1
+cd ~/projects/finalSI1
+chmod +x rubyonrials/bin/rails rubyonrials/bin/rake
+git status --short
+```
+
+The `git status` output should retain the same modified and untracked work as
+the Windows workspace. Then follow [rubyonrials/README.md](rubyonrials/README.md)
+to install antiX dependencies, recreate the Python venv, add the Linux Bundler
+platform, and start the model servers, Python adapter, and Rails UI.
+
 ---
 
 ## 🗺️ IX. Project Roadmap & GitHub Milestones
@@ -321,7 +391,7 @@ python -m unittest discover -s tests -p "test_*.py" -v
 - [x] Single-pass Four-Phase Duel Loop kernel (`si1.py`).
 - [x] Real-time browser-native telemetry dashboard (`web/dashboard.html`).
 - [x] Native ChatML message compilation and dual-channel thought routing (`ThoughtRouter`).
-- [ ] Implement strict output containment buffering (suppress raw chaos draft display prior to gate verification).
+- [x] Architect transparency mode: box chaos/refine thinking and drafts, Obi critique/opinion, raw gate response, and runtime evidence; treat verdict as post-hoc audit.
 - [ ] Add cryptographic event bundle hashing ($E_t$) to `DuelLog`.
 - [ ] Optimize KV-cache flushing routines across rounds to ensure zero token memory bleed.
 

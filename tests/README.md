@@ -1,7 +1,7 @@
 # SI-1 Test Suite
 
-Two test modules live in this folder. Both are pure-Python, no LLM
-server required.
+Three test modules live in this folder. They are pure-Python and do not
+require a live LLM server.
 
 ## `test_loop_structure.py` — pin the single-round four-phase contract
 
@@ -25,9 +25,9 @@ loop" pattern.
 11 tests, all AST-based — they walk the source tree, so the suite
 will fail loudly if someone reintroduces the runaway loop.
 
-## `test_smoke_tests.py` — messages pipeline, ThoughtRouter, Speak
+## `test_smoke_tests.py` — messages pipeline, tools, ThoughtRouter, Speak
 
-The original six smoke tests, refactored to run on POSIX paths and
+Smoke tests for the messages pipeline, tool handling, and gate behavior, refactored to run on POSIX paths and
 to import from `runtime_components` (the Generate class was moved
 out of the standalone `generate.py` module some time ago). They
 cover:
@@ -40,6 +40,19 @@ cover:
   marker / ANSI codes
 - End-to-end message structure: chaos (2 msgs) and refine (5 msgs,
   multi-turn)
+- Non-streaming tool-call replay and streaming tool-call execution/replay
+- Direct-tag reserved-marker sanitization and tool availability settings
+- Gate-input JSON framing with hostile instruction/fake-verdict content
+- Boxed visibility for all four phases on accept and reject
+- Post-hoc gate verdict and runtime evidence visibility
+- Aligned token and next-line payload parsing
+- SQL logger construction and query smoke coverage
+
+## `test_memory_store.py` — atomic persistence
+
+These tests verify that a successful save replaces valid JSON files and leaves
+no temporary files behind, and that a failed atomic replacement preserves the
+previous file and is surfaced to the caller.
 
 ## Running
 
@@ -52,4 +65,8 @@ python -m unittest tests.test_smoke_tests -v
 pytest tests/ -v
 ```
 
-All 17 tests pass on Linux.
+Run all three modules with:
+
+```bash
+python -m unittest tests.test_loop_structure tests.test_smoke_tests tests.test_memory_store -v
+```
