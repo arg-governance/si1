@@ -393,7 +393,7 @@ platform, and start the model servers, Python adapter, and Rails UI.
 - [x] Native ChatML message compilation and dual-channel thought routing (`ThoughtRouter`).
 - [x] Architect transparency mode: box chaos/refine thinking and drafts, Obi critique/opinion, raw gate response, and runtime evidence; treat verdict as post-hoc audit.
 - [ ] Add cryptographic event bundle hashing ($E_t$) to `DuelLog`.
-- [ ] Optimize KV-cache flushing routines across rounds to ensure zero token memory bleed.
+- [x] Optimize KV-cache flushing routines across rounds to ensure zero token memory bleed.
 
 ### Phase 2: Relational Memory & Lineage Persistence
 - [ ] Design the production PostgreSQL schema (`si1_evolution_ledger`) with relational state indexing.
