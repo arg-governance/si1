@@ -17,7 +17,7 @@ This is not a separate database service. It is a local embedded SQLite database 
 - `sql_logger.py` defines `SQLLogger` for execution log mirroring.
 - `sql_logger.py` defines `SQLDuelLog` for duel/audit log mirroring.
 - Both classes write rows into SQLite tables; the dual adapters in `si1.py` send runtime events to the existing JSONL logger and the SQL logger.
-- **Known defect:** Each SQL logger also appends its own JSONL copy. Since the adapter already invokes the primary JSONL logger, normal runtime events are duplicated in JSONL. Remove the SQL logger's JSONL append when it is used as the secondary store (or redesign the adapter around a single append path).
+- **Single-append ownership:** Fixed. The primary `Logger`/`DuelLog` owns the JSONL append; `SQLLogger`/`SQLDuelLog` are SQLite-only sinks. The runtime dual adapters call each sink once.
 - Database files are created adjacent to the log files, such as `logs/runlog.db` and `logs/duellog.db`.
 
 ## Data model and behavior
@@ -35,11 +35,12 @@ This is not a separate database service. It is a local embedded SQLite database 
 - `logs/runlog.jsonl` / `logs/runlog.db`
 - `logs/duellog.json` / `logs/duellog.db`
 
-## Verification status (2026-10-30)
+## Verification status (2026-11-06)
 
 - The three focused P3 regressions pass after installing `aiosqlite` in the configured system Python environment.
-- The full test suite now passes in configured system Python 3.13 after installing the declared `aiosqlite` dependency: `Ran 44 tests — OK`.
-- Add tests that invoke the runtime's dual adapters and assert one JSONL record plus one SQL row per event, including SQL failure behavior. SQL errors currently propagate after the JSONL write.
+- The full test suite passes in the configured Windows venv: `Ran 47 tests — OK`.
+- Regression coverage invokes both runtime dual adapters and asserts one JSONL record plus one SQL row per event. It also checks direct SQL-only logging does not create JSONL.
+- SQL errors still propagate after the primary JSONL write; failure policy and degraded-mode behavior need a separate decision and tests.
 
 ## Current status
 

@@ -7,7 +7,7 @@ import sys
 import textwrap
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional, Protocol
 
 import aiohttp
 
@@ -53,10 +53,34 @@ import runtime_components  # noqa: E402  (used for ThoughtRouter below)
 # predictable: 1 turn = 1 loop = 4 phases.
 
 
+class ExecutionLogSink(Protocol):
+    async def log(self, event: str, **detail: Any) -> None: ...
+
+    async def log_failure(
+        self, event: str, error: BaseException, **detail: Any
+    ) -> None: ...
+
+
+class DuelLogSink(Protocol):
+    async def record(
+        self,
+        turn: int,
+        round: int,
+        kind: str,
+        actor: str,
+        text: str,
+        **meta: Any,
+    ) -> None: ...
+
+
 class DualLogger:
     """Write to both the original JSONL logger and the SQL-backed logger."""
 
-    def __init__(self, primary: Logger, secondary: Optional[Logger] = None) -> None:
+    def __init__(
+        self,
+        primary: ExecutionLogSink,
+        secondary: Optional[ExecutionLogSink] = None,
+    ) -> None:
         self.primary = primary
         self.secondary = secondary
 
@@ -74,7 +98,11 @@ class DualLogger:
 class DualDuelLog:
     """Write to both the original JSONL duel log and the SQL-backed duel log."""
 
-    def __init__(self, primary: DuelLog, secondary: Optional[DuelLog] = None) -> None:
+    def __init__(
+        self,
+        primary: DuelLogSink,
+        secondary: Optional[DuelLogSink] = None,
+    ) -> None:
         self.primary = primary
         self.secondary = secondary
 
@@ -104,13 +132,13 @@ class SI1Runtime:
         archiver: ArchiveManager,
         prompt_engine: PromptEngine,
         memory: MemoryStore,
-        logger: Logger,
-        duel_log: DuelLog,
+        logger: ExecutionLogSink,
+        duel_log: DuelLogSink,
         runtime: M.RuntimeState,
         facts: list[M.Fact],
         archive: list[M.ArchiveEntry],
-        sql_logger: Optional[Logger] = None,
-        sql_duel_log: Optional[DuelLog] = None,
+        sql_logger: Optional[ExecutionLogSink] = None,
+        sql_duel_log: Optional[DuelLogSink] = None,
     ) -> None:
         self.lucifer = lucifer
         self.obi = obi

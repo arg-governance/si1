@@ -1,5 +1,18 @@
 ﻿# SI-1 Changelog
 
+## [Unreleased] — Fix duplicate JSONL dual-log writes
+
+### Fixed
+- `SQLLogger` and `SQLDuelLog` now write only to SQLite. The primary `Logger` and `DuelLog` own JSONL appends, so the `SI1Runtime` dual adapters produce exactly one JSONL record and one SQL row per event.
+- SQL database initialization creates its parent directory when needed.
+- Dual logger type contracts now use structural protocols, matching the JSONL and SQLite sink implementations.
+
+### Tests
+- Added a regression covering one JSONL line and one SQL row for both run and duel events, plus a direct SQL-only call that must not create JSONL.
+- Full suite: `python -m unittest discover -s tests -p "test_*.py" -q` → 47 passed.
+
+---
+
 ## [Unreleased] — Rails chat boot and Python service bridge
 
 ### Fixed

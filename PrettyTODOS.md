@@ -16,7 +16,7 @@ Status checked against `todos.md`, `CHANGELOG.md`, and current code on 2026-10-3
 - **Todo #3, engagement verification:** deterministic heuristics are stricter but are not semantic proof; add the planned unrelated-word, short/empty critique, paraphrase, and disagreement tests.
 - **Todo #4, override semantics:** current behavior is acknowledgment-only on a rejected override-bearing turn, but history/fact/archive side effects remain and lack contract tests.
 - **Todo #8, tests and docs:** P3 regressions and docs were added; callback/timeout, memory-recovery, override-side-effect, and broader adversarial coverage remain.
-- **P4, SQLite dual-log:** SQL classes and runtime adapters exist. They currently append twice to JSONL through the wrapper path, SQL errors propagate after the JSONL write, and adapter-level consistency/failure tests are needed. SQLite files are intended as `logs/runlog.db` and `logs/duellog.db`.
+- **P4, SQLite dual-log:** SQL sinks now write only SQLite; JSONL appends are owned by the primary loggers. Regression coverage verifies one JSONL line and one SQL row per event. SQL failures still propagate after the JSONL append and need a defined failure policy. SQLite files are intended as `logs/runlog.db` and `logs/duellog.db`.
 
 ## Pending
 

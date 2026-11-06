@@ -267,6 +267,54 @@ class TestSmoke(unittest.TestCase):
         asyncio.run(check())
         print("PASS: runtime exposes and writes SQL-backed loggers")
 
+    def test_6d_dual_log_writes_once_to_jsonl_and_sql(self) -> None:
+        import asyncio
+        import json
+        import tempfile
+
+        from logger import DuelLog, Logger
+        from si1 import DualDuelLog, DualLogger
+        from sql_logger import SQLDuelLog, SQLLogger
+
+        async def check(root: Path) -> None:
+            run_jsonl = root / "logs" / "runlog.jsonl"
+            duel_jsonl = root / "logs" / "duellog.json"
+            run_sql = SQLLogger(run_jsonl, db_file=root / "logs" / "runlog.db")
+            duel_sql = SQLDuelLog(duel_jsonl, db_file=root / "logs" / "duellog.db")
+            run_sink = DualLogger(Logger(run_jsonl), run_sql)
+            duel_sink = DualDuelLog(DuelLog(duel_jsonl), duel_sql)
+
+            await run_sink.log("single_run_event", user_input="private prompt")
+            await duel_sink.record(3, 0, "gate", "obi", "ACCEPTED", accepted=True)
+
+            run_lines = run_jsonl.read_text(encoding="utf-8").splitlines()
+            duel_lines = duel_jsonl.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(run_lines), 1)
+            self.assertEqual(json.loads(run_lines[0])["event"], "single_run_event")
+            self.assertEqual(len(duel_lines), 1)
+            self.assertEqual(json.loads(duel_lines[0])["kind"], "gate")
+
+            run_rows = await run_sql.query_recent_events(limit=10)
+            duel_rows = await duel_sql.query_by_turn(3)
+            self.assertEqual(len(run_rows), 1)
+            self.assertEqual(len(duel_rows), 1)
+
+            direct_jsonl = root / "direct" / "runlog.jsonl"
+            direct_sql = SQLLogger(direct_jsonl)
+            await direct_sql.log("sql_only_event")
+            self.assertFalse(direct_jsonl.exists())
+            self.assertTrue(direct_sql.db_file.exists())
+
+            direct_duel_jsonl = root / "direct" / "duellog.json"
+            direct_duel_sql = SQLDuelLog(direct_duel_jsonl)
+            await direct_duel_sql.record(4, 0, "gate", "obi", "ACCEPTED")
+            self.assertFalse(direct_duel_jsonl.exists())
+            self.assertTrue(direct_duel_sql.db_file.exists())
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            asyncio.run(check(Path(temp_dir)))
+        print("PASS: dual logger writes exactly once to JSONL and SQLite")
+
     def test_7_default_lucifer_tools_are_in_payload(self) -> None:
         from runtime_components import Generate  # noqa: WPS433
 

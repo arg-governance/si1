@@ -1,9 +1,7 @@
-"""SQL-based logging implementation for SI-1 dual-log (JSONL + SQL database).
+"""SQLite sinks used alongside SI-1's primary JSONL loggers.
 
-Provides SQLLogger and SQLDuelLog classes that mirror the functionality of
-the existing JSONL-based Logger and DuelLog, but store data in SQLite databases
-for enhanced querying capabilities while maintaining the JSONL files for
-backward compatibility and audit trails.
+The runtime's dual adapters call ``Logger``/``DuelLog`` for one JSONL append
+and these classes for one SQLite insert. SQL sinks never write JSONL.
 """
 
 from __future__ import annotations
@@ -11,16 +9,13 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-import sqlite3
-from dataclasses import dataclass, asdict, field
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
-import aiofiles
 import aiosqlite
 
 import config
-import models as M
 
 
 # Detail keys whose values are treated as potentially-sensitive content
@@ -79,16 +74,17 @@ class SQLDuelLogEvent:
 
 class SQLLogger:
     """
-    Async SQLite-based execution logger that mirrors JSONL Logger functionality.
+    Async SQLite sink for execution events.
 
-    Stores logs in SQLite database for enhanced querying while maintaining
-    the existing JSONL file for backward compatibility.
+    JSONL is written by the primary ``Logger`` through the runtime's dual
+    adapter. ``log_file`` is retained as the default database location source;
+    this class never appends to JSONL itself.
     """
 
     def __init__(self,
                  log_file: Path = config.RUN_LOG_FILE,
                  db_file: Optional[Path] = None) -> None:
-        self.log_file = log_file  # Keep JSONL for backward compatibility
+        self.log_file = log_file  # Used only to derive the default database path.
         self.db_file = db_file or (log_file.parent / f"{log_file.stem}.db")
         self._lock = asyncio.Lock()
         self._initialized = False
@@ -98,6 +94,7 @@ class SQLLogger:
         if self._initialized:
             return
 
+        self.db_file.parent.mkdir(parents=True, exist_ok=True)
         async with aiosqlite.connect(self.db_file) as db:
             # Create run_log table
             await db.execute("""
@@ -124,7 +121,7 @@ class SQLLogger:
         self._initialized = True
 
     async def log(self, event: str, **detail: Any) -> None:
-        """Log an event to both JSONL file and SQL database."""
+        """Insert a redacted execution event into SQLite."""
         # Redact sensitive details
         redacted_detail = _redact(detail)
 
@@ -135,14 +132,10 @@ class SQLLogger:
             detail=redacted_detail,
         )
 
-        # Write to JSONL file (maintain backward compatibility)
-        await self._append_to_jsonl(evt)
-
-        # Write to SQL database
         await self._append_to_sql(evt)
 
     async def log_failure(self, event: str, error: BaseException, **detail: Any) -> None:
-        """Log a failure event to both JSONL file and SQL database."""
+        """Insert a redacted failure event into SQLite."""
         # Redact sensitive details and add error info
         redacted_detail = _redact({**detail, "error": repr(error)})
 
@@ -153,19 +146,7 @@ class SQLLogger:
             detail=redacted_detail,
         )
 
-        # Write to JSONL file (maintain backward compatibility)
-        await self._append_to_jsonl(evt)
-
-        # Write to SQL database
         await self._append_to_sql(evt)
-
-    async def _append_to_jsonl(self, evt: SQLRunLogEvent) -> None:
-        """Append event to JSONL file (backward compatibility)."""
-        self.log_file.parent.mkdir(parents=True, exist_ok=True)
-        line = json.dumps(asdict(evt), ensure_ascii=False, separators=(",", ":"))
-
-        async with aiofiles.open(self.log_file, "a", encoding="utf-8") as f:
-            await f.write(line + "\n")
 
     async def _append_to_sql(self, evt: SQLRunLogEvent) -> None:
         """Append event to SQL database."""
@@ -201,16 +182,16 @@ class SQLLogger:
 
 
 class SQLDuelLog:
-    """Async SQLite-based duel log that mirrors JSONL DuelLog functionality.
+    """Async SQLite sink for duel events.
 
-    Stores duel logs in SQLite database for enhanced querying while maintaining
-    the existing JSONL file as the auditor's source of truth.
+    The primary ``DuelLog`` owns the JSONL audit stream; this class only
+    inserts into SQLite so the runtime dual adapter cannot duplicate lines.
     """
 
     def __init__(self,
                  log_file: Path = config.DUEL_LOG_FILE,
                  db_file: Optional[Path] = None) -> None:
-        self.log_file = log_file  # Keep JSONL as auditor's source of truth
+        self.log_file = log_file  # Used only to derive the default database path.
         self.db_file = db_file or (log_file.parent / f"{log_file.stem}.db")
         self._lock = asyncio.Lock()
         self._initialized = False
@@ -220,6 +201,7 @@ class SQLDuelLog:
         if self._initialized:
             return
 
+        self.db_file.parent.mkdir(parents=True, exist_ok=True)
         async with aiosqlite.connect(self.db_file) as db:
             # Create duel_log table
             await db.execute("""
@@ -270,7 +252,7 @@ class SQLDuelLog:
         text: str,
         **meta: Any,
     ) -> None:
-        """Record a duel event to both JSONL file and SQL database."""
+        """Insert a duel event into SQLite."""
         # Create duel log entry
         entry = SQLDuelLogEvent(
             ts=int(time.time()),
@@ -282,19 +264,7 @@ class SQLDuelLog:
             meta=dict(meta),
         )
 
-        # Write to JSONL file (maintain auditor's source of truth)
-        await self._append_to_jsonl(entry)
-
-        # Write to SQL database
         await self._append_to_sql(entry)
-
-    async def _append_to_jsonl(self, entry: SQLDuelLogEvent) -> None:
-        """Append entry to JSONL file (auditor's source of truth)."""
-        self.log_file.parent.mkdir(parents=True, exist_ok=True)
-        line = json.dumps(asdict(entry), ensure_ascii=False, separators=(",", ":"))
-
-        async with aiofiles.open(self.log_file, "a", encoding="utf-8") as f:
-            await f.write(line + "\n")
 
     async def _append_to_sql(self, entry: SQLDuelLogEvent) -> None:
         """Append entry to SQL database."""
